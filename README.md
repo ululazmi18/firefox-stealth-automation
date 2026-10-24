@@ -45,8 +45,13 @@ Berdasarkan pengujian empiris 3x run berturut-turut pada 17 situs benchmark bot 
 
 ## 🚀 Panduan Memulai Cepat (Quickstart)
 
-### 1. Kloning Repositori & Pasang Dependensi
+### 1. Prasyarat & Pemasangan Dependensi
+Pastikan Python 3.10+ telah terpasang. Direkomendasikan memasang **7-Zip** agar proses ekstraksi paket Firefox Portable berjalan 100% otomatis di latar belakang tanpa dialog GUI:
 ```powershell
+# Pasang 7-Zip (jika belum ada di sistem)
+winget install 7zip.7zip
+
+# Kloning repositori & pasang pustaka Python
 git clone https://github.com/ululazmi18/firefox-stealth-automation.git
 cd firefox-stealth-automation
 pip install -r requirements.txt
@@ -57,7 +62,7 @@ Jalankan bootstrapper mandiri untuk mengunduh, mengekstrak, dan mengonfigurasi F
 ```powershell
 python setup_browser.py
 ```
-*Skrip ini akan memeriksa ketersediaan biner, mengunduh dari CDN PortableApps jika belum ada, dan menyiapkan direktori profil `browser_profile/` dengan WebRTC hardening.*
+*Skrip ini akan memeriksa ketersediaan biner, mengunduh dari CDN PortableApps resmi (dengan fitur auto-resume & perpanjangan timeout), mengekstraknya menggunakan 7-Zip, dan menyiapkan direktori profil `browser_profile/` yang telah di-hardening anti-deteksi bot.*
 
 ### 3. Menjalankan Suite Audit 17 Situs Benchmark
 Jalankan harness pengujian untuk memverifikasi jejak otomasi kapan saja:

@@ -28,6 +28,13 @@ from rich.progress import (
 )
 from rich.table import Table
 
+# Standar encoding UTF-8 untuk terminal Windows
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 console = Console()
 
 WORKSPACE_DIR = Path(__file__).resolve().parent
@@ -81,12 +88,28 @@ def download_file(url: str, dest_path: Path) -> bool:
 
     console.print(f"[info]ℹ[/info] Menghubungi server CDN: [cyan]{url}[/cyan]")
 
+    headers = {}
+    existing_bytes = 0
+    if temp_path.exists():
+        existing_bytes = temp_path.stat().st_size
+        if existing_bytes > 0:
+            headers["Range"] = f"bytes={existing_bytes}-"
+            console.print(f"[info]ℹ Melanjutkan unduhan dari byte {existing_bytes} ({existing_bytes // (1024*1024)} MB)...[/info]")
+
     try:
         session = requests.Session()
-        resp = session.get(url, stream=True, impersonate="chrome124", allow_redirects=True, timeout=30)
-        resp.raise_for_status()
+        resp = session.get(url, stream=True, impersonate="chrome124", allow_redirects=True, headers=headers, timeout=600)
+        
+        is_resume = (resp.status_code == 206)
+        if not is_resume:
+            existing_bytes = 0
+            file_mode = "wb"
+            total_size = int(resp.headers.get("content-length", 0))
+        else:
+            file_mode = "ab"
+            total_size = existing_bytes + int(resp.headers.get("content-length", 0))
 
-        total_size = int(resp.headers.get("content-length", 0))
+        resp.raise_for_status()
 
         with Progress(
             SpinnerColumn(),
@@ -97,8 +120,8 @@ def download_file(url: str, dest_path: Path) -> bool:
             TimeRemainingColumn(),
             console=console,
         ) as progress:
-            task = progress.add_task("Mengunduh Firefox Portable...", total=total_size)
-            with open(temp_path, "wb") as f:
+            task = progress.add_task("Mengunduh Firefox Portable...", total=total_size, completed=existing_bytes)
+            with open(temp_path, file_mode) as f:
                 for chunk in resp.iter_content(chunk_size=65536):
                     if chunk:
                         f.write(chunk)
@@ -118,8 +141,6 @@ def download_file(url: str, dest_path: Path) -> bool:
 
     except Exception as err:
         console.print(f"[error]✗ Galat saat mengunduh berkas:[/error] {err}")
-        if temp_path.exists():
-            temp_path.unlink()
         return False
 
 
@@ -136,23 +157,45 @@ def install_portable_package(installer_path: Path, target_dir: Path) -> bool:
     console.print(f"[info]ℹ[/info] Mengekstrak paket instalasi ke: [cyan]{target_dir}[/cyan]...")
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    # Flag NSIS PortableApps: /S = Silent, /D=<path> = Directory tujuan (tanpa tanda kutip)
+    # 1. Prioritaskan ekstraksi langsung menggunakan 7-Zip (100% senyap, andal, tanpa GUI)
+    seven_zip_candidates = [
+        Path(r"C:\Program Files\7-Zip\7z.exe"),
+        Path(r"C:\Program Files (x86)\7-Zip\7z.exe"),
+        Path(shutil.which("7z") or ""),
+    ]
+    seven_zip = next((p for p in seven_zip_candidates if p and p.exists()), None)
+    if seven_zip:
+        console.print(f"[info]ℹ Menggunakan 7-Zip untuk ekstraksi: [cyan]{seven_zip}[/cyan][/info]")
+        cmd_7z = [str(seven_zip), "x", str(installer_path.resolve()), f"-o{target_dir.resolve()}", "-y"]
+        try:
+            res = subprocess.run(cmd_7z, capture_output=True, text=True, timeout=300)
+            if res.returncode == 0:
+                ff_bin = get_firefox_executable(target_dir)
+                if ff_bin and ff_bin.exists():
+                    console.print(f"[success]✓ Firefox Portable berhasil diekstrak via 7-Zip:[/success] [cyan]{ff_bin}[/cyan]")
+                    return True
+        except Exception as err:
+            console.print(f"[warning]⚠ Ekstraksi 7-Zip gagal, mencoba fallback installer:[/warning] {err}")
+
+    # 2. Fallback: Eksekusi installer NSIS bawaan
     cmd = [str(installer_path.resolve()), "/S", f"/D={target_dir.resolve()}"]
 
     try:
         proc = subprocess.run(cmd, timeout=300, capture_output=True)
-        time.sleep(2.0)  # Beri jeda proses ekstraksi I/O Windows selesai
     except Exception as err:
         console.print(f"[error]✗ Kegagalan saat mengeksekusi installer:[/error] {err}")
         return False
 
-    ff_bin = get_firefox_executable(target_dir)
-    if ff_bin and ff_bin.exists():
-        console.print(f"[success]✓ Firefox Portable berhasil dipasang:[/success] [cyan]{ff_bin}[/cyan]")
-        return True
-    else:
-        console.print(f"[error]✗ Berkas biner firefox.exe tidak ditemukan di {target_dir} pasca-instalasi.[/error]")
-        return False
+    # Tunggu ekstraksi berkas biner firefox.exe (hingga 30 detik)
+    for _ in range(15):
+        time.sleep(2.0)
+        ff_bin = get_firefox_executable(target_dir)
+        if ff_bin and ff_bin.exists():
+            console.print(f"[success]✓ Firefox Portable berhasil dipasang:[/success] [cyan]{ff_bin}[/cyan]")
+            return True
+
+    console.print(f"[error]✗ Berkas biner firefox.exe tidak ditemukan di {target_dir} pasca-instalasi.[/error]")
+    return False
 
 
 def setup_clean_profile(profile_dir: Path | None = None) -> Path:
