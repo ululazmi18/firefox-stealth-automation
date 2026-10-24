@@ -45,7 +45,18 @@ Berdasarkan pengujian empiris 3x run berturut-turut pada 17 situs benchmark bot 
 
 ## 🚀 Panduan Memulai Cepat (Quickstart)
 
-### 1. Prasyarat & Pemasangan Dependensi
+### ⚡ Cara Termudah: 1 Baris Perintah PowerShell (Otomatis Penuh)
+Cukup buka terminal PowerShell dan jalankan **1 baris perintah** berikut:
+```powershell
+irm https://raw.githubusercontent.com/ululazmi18/firefox-stealth-automation/main/install.ps1 | iex
+```
+*Skrip ini akan otomatis memeriksa & memasang Python, Git, 7-Zip, mengkloning repositori, memasang pustaka, serta mengunduh dan mengonfigurasi Firefox Portable Edition resmi!*
+
+---
+
+### 🛠️ Pemasangan Manual Langkah demi Langkah (Alternatif)
+
+#### 1. Prasyarat & Pemasangan Dependensi
 Pastikan Python 3.10+ telah terpasang. Direkomendasikan memasang **7-Zip** agar proses ekstraksi paket Firefox Portable berjalan 100% otomatis di latar belakang tanpa dialog GUI:
 ```powershell
 # Pasang 7-Zip (jika belum ada di sistem)
@@ -57,7 +68,7 @@ cd firefox-stealth-automation
 pip install -r requirements.txt
 ```
 
-### 2. Bootstrapping Firefox Portable (Satu Baris Perintah)
+#### 2. Bootstrapping Firefox Portable (Satu Baris Perintah)
 Jalankan bootstrapper mandiri untuk mengunduh, mengekstrak, dan mengonfigurasi Firefox Portable Edition resmi secara senyap:
 ```powershell
 python setup_browser.py
