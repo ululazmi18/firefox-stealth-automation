@@ -1,0 +1,31 @@
+# Firefox Portable Binaries
+firefox_portable/
+temp_firefox_installer.paf.exe
+*.paf.exe
+
+# Browser Profile (Sensitive: logins, cookies, storage)
+browser_profile/
+
+# Test Artifacts, Reports & Screenshots
+reports/
+screenshots/
+outputs/
+debug/
+
+# Python Cache & Virtual Environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# Generated XPI
+*.xpi
+
+# Environment & Logs
+.env
+*.log
+tmp/
+temp/
