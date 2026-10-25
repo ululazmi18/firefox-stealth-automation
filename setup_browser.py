@@ -42,6 +42,9 @@ DEFAULT_PORTABLE_DIR = WORKSPACE_DIR / "firefox_portable"
 DEFAULT_PROFILE_DIR = WORKSPACE_DIR / "browser_profile"
 
 OFFICIAL_DOWNLOAD_URL = (
+    "https://archive.mozilla.org/pub/firefox/releases/115.19.0esr/win64/en-US/Firefox%20Setup%20115.19.0esr.exe"
+)
+FALLBACK_DOWNLOAD_URL = (
     "https://download2.portableapps.com/portableapps/FirefoxPortable/FirefoxPortable_158.0_English.paf.exe"
 )
 
@@ -59,6 +62,8 @@ def get_firefox_executable(portable_dir: Path | None = None) -> Path | None:
     candidates = [
         target_dir / "App" / "Firefox64" / "firefox.exe",
         target_dir / "App" / "Firefox" / "firefox.exe",
+        target_dir / "core" / "firefox.exe",
+        target_dir / "firefox.exe",
     ]
     for path in candidates:
         if path.exists() and path.is_file():
@@ -66,12 +71,13 @@ def get_firefox_executable(portable_dir: Path | None = None) -> Path | None:
     return None
 
 
-def download_file(url: str, dest_path: Path) -> bool:
-    """Mengunduh berkas biner dari URL langsung dengan visual progress bar Rich.
+def download_file(url: str, dest_path: Path, max_retries: int = 5) -> bool:
+    """Mengunduh berkas biner dari URL langsung dengan dukungan auto-resume dan retry.
 
     Args:
         url (str): URL sumber pengunduhan.
         dest_path (Path): Jalur berkas lokal tujuan penyimpanan.
+        max_retries (int): Batas maksimal percobaan koneksi ulang jika terjadi gangguan jaringan.
 
     Returns:
         bool: True jika berhasil diunduh dan ukuran valid.
@@ -82,64 +88,88 @@ def download_file(url: str, dest_path: Path) -> bool:
         import requests  # type: ignore
 
     dest_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = dest_path.with_suffix(".downloading")
+    temp_path = dest_path.with_name(dest_path.stem + ".downloading")
 
     console.print(f"[info]ℹ[/info] Menghubungi server CDN: [cyan]{url}[/cyan]")
 
-    headers = {}
-    existing_bytes = 0
-    if temp_path.exists():
-        existing_bytes = temp_path.stat().st_size
-        if existing_bytes > 0:
-            headers["Range"] = f"bytes={existing_bytes}-"
-            console.print(f"[info]ℹ Melanjutkan unduhan dari byte {existing_bytes} ({existing_bytes // (1024*1024)} MB)...[/info]")
+    urls_to_try = [url]
+    if url != FALLBACK_DOWNLOAD_URL:
+        urls_to_try.append(FALLBACK_DOWNLOAD_URL)
 
-    try:
-        session = requests.Session()
-        resp = session.get(url, stream=True, impersonate="chrome124", allow_redirects=True, headers=headers, timeout=600)
-        
-        is_resume = (resp.status_code == 206)
-        if not is_resume:
-            existing_bytes = 0
-            file_mode = "wb"
-            total_size = int(resp.headers.get("content-length", 0))
-        else:
-            file_mode = "ab"
-            total_size = existing_bytes + int(resp.headers.get("content-length", 0))
+    for current_url in urls_to_try:
+        for attempt in range(1, max_retries + 1):
+            try:
+                existing_bytes = 0
+                if temp_path.exists():
+                    existing_bytes = temp_path.stat().st_size
 
-        resp.raise_for_status()
+                headers = {}
+                if existing_bytes > 0:
+                    headers["Range"] = f"bytes={existing_bytes}-"
+                    console.print(
+                        f"[info]ℹ Melanjutkan unduhan dari byte {existing_bytes} "
+                        f"({existing_bytes // (1024*1024)} MB) [Percobaan {attempt}/{max_retries}]...[/info]"
+                    )
 
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[bold blue]{task.description}"),
-            BarColumn(bar_width=40),
-            DownloadColumn(),
-            TransferSpeedColumn(),
-            TimeRemainingColumn(),
-            console=console,
-        ) as progress:
-            task = progress.add_task("Mengunduh Firefox Portable...", total=total_size, completed=existing_bytes)
-            with open(temp_path, file_mode) as f:
-                for chunk in resp.iter_content(chunk_size=65536):
-                    if chunk:
-                        f.write(chunk)
-                        progress.update(task, advance=len(chunk))
+                session = requests.Session()
+                resp = session.get(
+                    current_url,
+                    stream=True,
+                    impersonate="chrome124",
+                    allow_redirects=True,
+                    headers=headers,
+                    timeout=30,
+                )
 
-        if temp_path.exists() and temp_path.stat().st_size > 10 * 1024 * 1024:
-            if dest_path.exists():
-                dest_path.unlink()
-            temp_path.rename(dest_path)
-            console.print(f"[success]✓ Pengunduhan selesai:[/success] {dest_path.name} ({dest_path.stat().st_size // (1024*1024)} MB)")
-            return True
-        else:
-            console.print("[error]✗ Unduhan tidak lengkap atau ukuran berkas tidak valid.[/error]")
-            if temp_path.exists():
-                temp_path.unlink()
-            return False
+                is_resume = (resp.status_code == 206)
+                if not is_resume:
+                    existing_bytes = 0
+                    file_mode = "wb"
+                    total_size = int(resp.headers.get("content-length", 0))
+                else:
+                    file_mode = "ab"
+                    content_len = int(resp.headers.get("content-length", 0))
+                    total_size = existing_bytes + content_len
 
-    except Exception as err:
-        console.print(f"[error]✗ Galat saat mengunduh berkas:[/error] {err}")
-        return False
+                resp.raise_for_status()
+
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[bold blue]{task.description}"),
+                    BarColumn(bar_width=40),
+                    DownloadColumn(),
+                    TransferSpeedColumn(),
+                    TimeRemainingColumn(),
+                    console=console,
+                ) as progress:
+                    task = progress.add_task(
+                        "Mengunduh Firefox Portable...",
+                        total=total_size if total_size > 0 else None,
+                        completed=existing_bytes,
+                    )
+                    with open(temp_path, file_mode) as f:
+                        for chunk in resp.iter_content(chunk_size=131072):
+                            if chunk:
+                                f.write(chunk)
+                                progress.update(task, advance=len(chunk))
+
+                # Verifikasi ukuran akhir (minimal 50 MB untuk installer Firefox)
+                if temp_path.exists() and temp_path.stat().st_size >= 50 * 1024 * 1024:
+                    if dest_path.exists():
+                        dest_path.unlink()
+                    temp_path.rename(dest_path)
+                    console.print(
+                        f"[success]✓ Pengunduhan selesai:[/success] {dest_path.name} "
+                        f"({dest_path.stat().st_size // (1024*1024)} MB)"
+                    )
+                    return True
+
+            except Exception as err:
+                console.print(f"[warning]⚠ Gangguan koneksi ({err}). Menyambung ulang dalam 2 detik...[/warning]")
+                time.sleep(2)
+
+    console.print("[error]✗ Batas percobaan pengunduhan habis. Periksa koneksi internet Anda.[/error]")
+    return False
 
 
 def install_portable_package(installer_path: Path, target_dir: Path) -> bool:
@@ -168,6 +198,21 @@ def install_portable_package(installer_path: Path, target_dir: Path) -> bool:
         try:
             res = subprocess.run(cmd_7z, capture_output=True, text=True, timeout=300)
             if res.returncode == 0:
+                # Jika diekstrak dari installer resmi Mozilla (berisi folder core/), tata ke App/Firefox64
+                core_dir = target_dir / "core"
+                app_ff64 = target_dir / "App" / "Firefox64"
+                if core_dir.exists() and (core_dir / "firefox.exe").exists():
+                    app_ff64.mkdir(parents=True, exist_ok=True)
+                    for item in core_dir.iterdir():
+                        dest_item = app_ff64 / item.name
+                        if dest_item.exists():
+                            if dest_item.is_dir():
+                                shutil.rmtree(dest_item, ignore_errors=True)
+                            else:
+                                dest_item.unlink(missing_ok=True)
+                        shutil.move(str(item), str(app_ff64))
+                    shutil.rmtree(core_dir, ignore_errors=True)
+
                 ff_bin = get_firefox_executable(target_dir)
                 if ff_bin and ff_bin.exists():
                     console.print(f"[success]✓ Firefox Portable berhasil diekstrak via 7-Zip:[/success] [cyan]{ff_bin}[/cyan]")
@@ -218,7 +263,7 @@ user_pref("toolkit.telemetry.reportingpolicy.firstRun", false);
 user_pref("browser.sessionstore.resume_from_crash", false);
 
 // HARDENING WEBRTC & PRIVASI JARINGAN (ITERASI 2)
-user_pref("media.peerconnection.enabled", false);
+user_pref("media.peerconnection.enabled", true);
 user_pref("media.peerconnection.ice.no_host", true);
 user_pref("media.peerconnection.ice.default_address_only", true);
 """
