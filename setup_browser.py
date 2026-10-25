@@ -40,7 +40,6 @@ console = Console()
 WORKSPACE_DIR = Path(__file__).resolve().parent
 DEFAULT_PORTABLE_DIR = WORKSPACE_DIR / "firefox_portable"
 DEFAULT_PROFILE_DIR = WORKSPACE_DIR / "browser_profile"
-FALLBACK_SYSTEM_FF = Path(r"D:\FirefoxPortable\App\Firefox64\firefox.exe")
 
 OFFICIAL_DOWNLOAD_URL = (
     "https://download2.portableapps.com/portableapps/FirefoxPortable/FirefoxPortable_158.0_English.paf.exe"
@@ -60,7 +59,6 @@ def get_firefox_executable(portable_dir: Path | None = None) -> Path | None:
     candidates = [
         target_dir / "App" / "Firefox64" / "firefox.exe",
         target_dir / "App" / "Firefox" / "firefox.exe",
-        FALLBACK_SYSTEM_FF,
     ]
     for path in candidates:
         if path.exists() and path.is_file():

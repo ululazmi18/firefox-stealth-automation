@@ -270,8 +270,7 @@ class AuditHarness:
     def _find_ff_binary(self) -> Path:
         candidates = [
             WORKSPACE_DIR / "firefox_portable" / "App" / "Firefox64" / "firefox.exe",
-            Path(r"D:\FirefoxPortable\App\Firefox64\firefox.exe"),
-            Path(r"D:\FirefoxPortable\App\Firefox\firefox.exe"),
+            WORKSPACE_DIR / "firefox_portable" / "App" / "Firefox" / "firefox.exe",
         ]
         for c in candidates:
             if c.exists():
