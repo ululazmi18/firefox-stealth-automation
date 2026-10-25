@@ -51,19 +51,132 @@ DEFAULT_CHROME_BIN = WORKSPACE_DIR / "chrome_portable" / "chrome.exe"
 FLOW_HOME_URL = "https://flow.google.com/"
 
 
+def download_chrome_portable(target_dir: Path) -> Path | None:
+    """Mengunduh dan mengekstrak biner Chrome Portable resmi dari Google CDN via 7-Zip."""
+    import urllib.request
+    from rich.progress import (
+        BarColumn,
+        DownloadColumn,
+        Progress,
+        SpinnerColumn,
+        TextColumn,
+        TimeRemainingColumn,
+        TransferSpeedColumn,
+    )
+
+    console.print(
+        Panel(
+            "[bold cyan]PENYEDIAAN BINER MESIN OTOMASI MANDIRI (CHROME PORTABLE)[/bold cyan]\n\n"
+            "Google Chrome tidak ditemukan di sistem Windows. Sistem akan mengunduh biner\n"
+            "[white]Chrome for Testing Win64 (Resmi Google)[/white] langsung ke folder proyek lokal.\n"
+            "Biner ini 100% portabel dan terisolasi di dalam proyek.",
+            box=box.ROUNDED,
+            title="[yellow]Auto Provisioning Engine[/yellow]",
+        )
+    )
+
+    download_url = "https://storage.googleapis.com/chrome-for-testing-public/156.0.8078.47/win64/chrome-win64.zip"
+    try:
+        api_url = "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json"
+        req = urllib.request.Request(api_url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = json.loads(r.read().decode())
+            stable = data["channels"]["Stable"]
+            download_url = next(d["url"] for d in stable["downloads"]["chrome"] if d["platform"] == "win64")
+    except Exception:
+        pass
+
+    temp_zip = WORKSPACE_DIR / "temp_chrome.zip"
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    console.print(f"[info]Mengunduh Chrome Portable dari Google CDN...[/info]")
+    try:
+        req = urllib.request.Request(download_url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=60) as resp, open(temp_zip, "wb") as f_out:
+            total_size = int(resp.headers.get("content-length", 0))
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                DownloadColumn(),
+                TransferSpeedColumn(),
+                TimeRemainingColumn(),
+                console=console,
+            ) as progress:
+                task = progress.add_task("[cyan]Mengunduh Chrome Portable...[/cyan]", total=total_size)
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    f_out.write(chunk)
+                    progress.update(task, advance=len(chunk))
+
+        console.print("[info]Mengekstrak paket biner via 7-Zip...[/info]")
+        seven_zip_candidates = [
+            Path(r"C:\Program Files\7-Zip\7z.exe"),
+            Path(r"C:\Program Files (x86)\7-Zip\7z.exe"),
+            Path(shutil.which("7z") or ""),
+        ]
+        seven_zip = next((p for p in seven_zip_candidates if p and p.exists()), None)
+        if seven_zip:
+            cmd = [str(seven_zip), "x", str(temp_zip.resolve()), f"-o{target_dir.resolve()}", "-y"]
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300)
+            extracted_sub = target_dir / "chrome-win64"
+            if extracted_sub.exists():
+                for item in extracted_sub.iterdir():
+                    dest_item = target_dir / item.name
+                    if dest_item.exists():
+                        if dest_item.is_dir():
+                            shutil.rmtree(dest_item, ignore_errors=True)
+                        else:
+                            dest_item.unlink(missing_ok=True)
+                    shutil.move(str(item), str(target_dir))
+                shutil.rmtree(extracted_sub, ignore_errors=True)
+        else:
+            import zipfile
+            with zipfile.ZipFile(temp_zip, "r") as zf:
+                zf.extractall(target_dir)
+            extracted_sub = target_dir / "chrome-win64"
+            if extracted_sub.exists():
+                for item in extracted_sub.iterdir():
+                    dest_item = target_dir / item.name
+                    if dest_item.exists():
+                        if dest_item.is_dir():
+                            shutil.rmtree(dest_item, ignore_errors=True)
+                        else:
+                            dest_item.unlink(missing_ok=True)
+                    shutil.move(str(item), str(target_dir))
+                shutil.rmtree(extracted_sub, ignore_errors=True)
+
+        if temp_zip.exists():
+            temp_zip.unlink(missing_ok=True)
+
+        chrome_bin = target_dir / "chrome.exe"
+        if chrome_bin.exists():
+            console.print(f"[success]✓ Chrome Portable berhasil disiapkan di:[/success] [cyan]{chrome_bin}[/cyan]")
+            return chrome_bin
+
+    except Exception as err:
+        console.print(f"[error]✗ Gagal mengunduh Chrome Portable:[/error] {err}")
+        if temp_zip.exists():
+            temp_zip.unlink(missing_ok=True)
+        return None
+
+    return None
+
+
 def ensure_local_chrome_engine() -> Path | None:
     """Memastikan biner peramban otomasi lokal (chrome_portable) tersedia di direktori proyek."""
     if DEFAULT_CHROME_BIN.exists():
         return DEFAULT_CHROME_BIN
 
-    # Jika belum ada di lokal, periksa apakah tersedia di Program Files sistem untuk disalin sebagai portabel lokal
+    # 1. Jalur Cepat: Periksa apakah tersedia di Program Files sistem untuk disalin cepat sebagai biner lokal
     sys_chrome = Path(r"C:\Program Files\Google\Chrome\Application")
     if sys_chrome.exists() and (sys_chrome / "chrome.exe").exists():
-        console.print("[info]Menyiapkan mesin otomasi lokal mandiri (chrome_portable)...[/info]")
+        console.print("[info]Menyiapkan mesin otomasi lokal mandiri (chrome_portable) dari instalasi sistem...[/info]")
         target_dir = WORKSPACE_DIR / "chrome_portable"
         target_dir.mkdir(parents=True, exist_ok=True)
         try:
-            # Gunakan robocopy untuk penyalinan cepat
             cmd = f'robocopy "{sys_chrome}" "{target_dir}" /E /R:1 /W:1 >nul 2>&1'
             subprocess.run(cmd, shell=True)
             if DEFAULT_CHROME_BIN.exists():
@@ -72,7 +185,8 @@ def ensure_local_chrome_engine() -> Path | None:
         except Exception:
             pass
 
-    return None
+    # 2. Jalur Mandiri (Zero Dependency): Unduh Chrome for Testing Win64 resmi langsung dari Google CDN
+    return download_chrome_portable(WORKSPACE_DIR / "chrome_portable")
 
 
 def save_playwright_cookies_to_firefox(
