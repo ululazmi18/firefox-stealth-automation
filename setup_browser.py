@@ -41,12 +41,65 @@ WORKSPACE_DIR = Path(__file__).resolve().parent
 DEFAULT_PORTABLE_DIR = WORKSPACE_DIR / "firefox_portable"
 DEFAULT_PROFILE_DIR = WORKSPACE_DIR / "browser_profile"
 
+import socket
+
 OFFICIAL_DOWNLOAD_URL = (
     "https://archive.mozilla.org/pub/firefox/releases/115.19.0esr/win64/en-US/Firefox%20Setup%20115.19.0esr.exe"
 )
 FALLBACK_DOWNLOAD_URL = (
     "https://ftp.mozilla.org/pub/firefox/releases/115.19.0esr/win64/en-US/Firefox%20Setup%20115.19.0esr.exe"
 )
+
+
+class AbortLowSpeedException(Exception):
+    """Pengecualian saat kecepatan unduh berada di bawah batas absolut minimum (100 kB/s)."""
+
+    def __init__(self, speed_kbs: float):
+        super().__init__(f"Kecepatan {speed_kbs:.1f} kB/s di bawah batas minimum 100 kB/s.")
+        self.speed_kbs = speed_kbs
+
+
+def is_internet_available(timeout: float = 3.0) -> bool:
+    """Memeriksa apakah perangkat memiliki koneksi aktif ke jaringan internet."""
+    test_hosts = [("1.1.1.1", 53), ("8.8.8.8", 53), ("archive.mozilla.org", 443)]
+    for host, port in test_hosts:
+        try:
+            sock = socket.create_connection((host, port), timeout=timeout)
+            sock.close()
+            return True
+        except (OSError, socket.timeout):
+            continue
+    return False
+
+
+def wait_for_internet_recovery() -> None:
+    """Menghentikan alur sementara dan meminta pengguna memastikan koneksi stabil sebelum melanjutkan."""
+    console.print(
+        Panel(
+            "[bold red]✗ TIDAK ADA KONEKSI INTERNET TERDETEKSI[/bold red]\n\n"
+            "Perangkat Anda saat ini terputus dari jaringan internet atau server tidak dapat dijangkau.\n"
+            "[yellow]Pengunduhan dijeda sementara demi keamanan data dan mencegah korupsi berkas.[/yellow]\n\n"
+            "[white]Silakan periksa koneksi Wi-Fi/LAN/Data Anda hingga stabil kembali.[/white]\n"
+            "[bold green]Jika koneksi internet sudah aktif kembali, tekan [ENTER] untuk melanjutkan unduhan...[/bold green]",
+            box=box.ROUNDED,
+            title="[red]Peringatan Jaringan Terputus[/red]",
+        )
+    )
+    while True:
+        try:
+            input()
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[dim]Dibatalkan oleh pengguna.[/dim]")
+            sys.exit(1)
+
+        console.print("[info]ℹ Menguji kembali ketersediaan jaringan internet...[/info]")
+        if is_internet_available():
+            console.print("[success]✓ Koneksi internet terdeteksi aktif dan stabil! Melanjutkan unduhan...[/success]")
+            break
+        else:
+            console.print(
+                "[warning]⚠ Koneksi internet masih belum terhubung. Silakan periksa jaringan dan tekan [ENTER] kembali.[/warning]"
+            )
 
 
 def _safe_move(src: Path, dst: Path, retries: int = 10, delay: float = 0.3) -> bool:
@@ -92,7 +145,7 @@ def get_firefox_executable(portable_dir: Path | None = None) -> Path | None:
 
 
 def download_file(url: str, dest_path: Path, max_retries: int = 5) -> bool:
-    """Mengunduh berkas biner dari URL langsung dengan dukungan auto-resume dan retry.
+    """Mengunduh berkas biner dari URL langsung dengan dukungan auto-resume, retry, dan adaptive speed monitor.
 
     Args:
         url (str): URL sumber pengunduhan.
@@ -119,17 +172,31 @@ def download_file(url: str, dest_path: Path, max_retries: int = 5) -> bool:
             )
             return True
 
+    # Pengecekan koneksi internet sebelum memulai
+    if not is_internet_available():
+        wait_for_internet_recovery()
+
     console.print(f"[info]ℹ[/info] Menghubungi server CDN: [cyan]{url}[/cyan]")
 
     urls_to_try = [url]
     if url != FALLBACK_DOWNLOAD_URL:
         urls_to_try.append(FALLBACK_DOWNLOAD_URL)
 
+    current_tier_kb = 500.0
+    slow_streak = 0
+
     for current_url in urls_to_try:
-        for attempt in range(1, max_retries + 1):
+        attempt = 0
+        while attempt < max_retries:
+            attempt += 1
             session = None
             resp = None
             try:
+                # Verifikasi internet sebelum menembak request
+                if not is_internet_available():
+                    wait_for_internet_recovery()
+                    attempt = 1  # Reset attempt setelah internet pulih
+
                 existing_bytes = 0
                 if temp_path.exists():
                     existing_bytes = temp_path.stat().st_size
@@ -186,6 +253,13 @@ def download_file(url: str, dest_path: Path, max_retries: int = 5) -> bool:
 
                 resp.raise_for_status()
 
+                # Pemantauan Kecepatan Adaptif (500 -> 300 -> 100 kB/s)
+                start_stream_time = time.time()
+                last_eval_time = start_stream_time
+                bytes_in_window = 0
+                warmup_seconds = 3.0
+                eval_interval = 3.0
+
                 with Progress(
                     SpinnerColumn(),
                     TextColumn("[bold blue]{task.description}"),
@@ -201,10 +275,42 @@ def download_file(url: str, dest_path: Path, max_retries: int = 5) -> bool:
                         completed=existing_bytes,
                     )
                     with open(temp_path, file_mode) as f:
-                        for chunk in resp.iter_content(chunk_size=131072):
-                            if chunk:
-                                f.write(chunk)
-                                progress.update(task, advance=len(chunk))
+                        for chunk in resp.iter_content(chunk_size=65536):
+                            if not chunk:
+                                continue
+                            f.write(chunk)
+                            chunk_len = len(chunk)
+                            progress.update(task, advance=chunk_len)
+                            bytes_in_window += chunk_len
+
+                            now = time.time()
+                            # Evaluasi kecepatan setelah fase pemanasan awal
+                            if now - start_stream_time > warmup_seconds and (now - last_eval_time) >= eval_interval:
+                                window_duration = now - last_eval_time
+                                current_speed_kbs = (bytes_in_window / 1024.0) / window_duration
+                                last_eval_time = now
+                                bytes_in_window = 0
+
+                                if current_speed_kbs < current_tier_kb:
+                                    slow_streak += 1
+                                    if current_tier_kb == 500.0 and slow_streak >= 3:
+                                        current_tier_kb = 300.0
+                                        slow_streak = 0
+                                        console.print(
+                                            f"\n[yellow]⚠ Kecepatan unduh ({current_speed_kbs:.1f} kB/s) di bawah standar 500 kB/s (3x).\n"
+                                            f"  Menyesuaikan toleransi ke batas 300 kB/s...[/yellow]"
+                                        )
+                                    elif current_tier_kb == 300.0 and slow_streak >= 3:
+                                        current_tier_kb = 100.0
+                                        slow_streak = 0
+                                        console.print(
+                                            f"\n[yellow]⚠ Kecepatan unduh ({current_speed_kbs:.1f} kB/s) di bawah standar 300 kB/s (3x).\n"
+                                            f"  Menyesuaikan toleransi ke batas minimum 100 kB/s...[/yellow]"
+                                        )
+                                    elif current_tier_kb == 100.0 and slow_streak >= 3:
+                                        raise AbortLowSpeedException(current_speed_kbs)
+                                else:
+                                    slow_streak = 0
 
                 # Tutup session dan response agar tidak ada file handle yang tertahan di Windows
                 try:
@@ -225,9 +331,39 @@ def download_file(url: str, dest_path: Path, max_retries: int = 5) -> bool:
                         )
                         return True
 
+            except AbortLowSpeedException as err:
+                console.print(
+                    Panel(
+                        f"[bold red]⚠ KECEPATAN UNDUH TERLALU LAMBAT ({err.speed_kbs:.1f} kB/s < 100 kB/s)[/bold red]\n\n"
+                        "Pengunduhan telah diuji dan kecepatan transfer terdeteksi di bawah batas minimum 100 kB/s.\n"
+                        "[yellow]Pengunduhan dihentikan sementara untuk memastikan koneksi internet Anda stabil.[/yellow]\n\n"
+                        "[white]Silakan periksa koneksi internet Anda (sinyal provider, penggunaan bandwidth, atau hotspot).[/white]\n"
+                        "[bold green]Jika koneksi internet sudah membaik, tekan [ENTER] untuk melanjutkan unduhan...[/bold green]",
+                        box=box.ROUNDED,
+                        title="[red]Peringatan Batas Kecepatan Minimum[/red]",
+                    )
+                )
+                try:
+                    input()
+                except (KeyboardInterrupt, EOFError):
+                    console.print("\n[dim]Dibatalkan oleh pengguna.[/dim]")
+                    sys.exit(1)
+
+                current_tier_kb = 500.0
+                slow_streak = 0
+                attempt = 0
+                continue
+
             except Exception as err:
+                # Periksa apakah error disebabkan oleh koneksi internet yang putus total
+                if not is_internet_available():
+                    wait_for_internet_recovery()
+                    attempt = 0
+                    continue
+
                 console.print(f"[warning]⚠ Gangguan koneksi ({err}). Menyambung ulang dalam 2 detik...[/warning]")
                 time.sleep(2)
+
             finally:
                 if resp is not None:
                     try:
