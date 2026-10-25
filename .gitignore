@@ -1,5 +1,6 @@
-# Firefox Portable Binaries
+# Firefox & Chrome Portable Binaries
 firefox_portable/
+chrome_portable/
 temp_firefox_installer.paf.exe
 *.paf.exe
 

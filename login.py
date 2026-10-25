@@ -1,0 +1,733 @@
+"""FIREFOX STEALTH AUTOMATION — GOOGLE FLOW AUTHENTICATION MANAGER (FULL CLI).
+
+Modul autentikasi mandiri untuk menghubungkan sesi akun Google ke dalam
+profil Firefox Portable lokal (browser_profile/cookies.sqlite) secara 100% Full CLI
+di latar belakang (headless), tanpa pop-up jendela manual dan tanpa menyentuh data browser pribadi.
+"""
+
+import argparse
+import os
+import random
+import re
+import shutil
+import sqlite3
+import subprocess
+import sys
+import time
+from pathlib import Path
+from urllib.parse import urlparse
+
+# Standar encoding UTF-8 untuk terminal Windows
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
+from rich import box
+from rich.console import Console
+from rich.panel import Panel
+from rich.prompt import Prompt
+from rich.theme import Theme
+
+CUSTOM_THEME = Theme(
+    {
+        "info": "cyan",
+        "success": "bold green",
+        "warning": "bold yellow",
+        "error": "bold red",
+        "accent": "bold magenta",
+        "muted": "dim white",
+        "gold": "bold yellow",
+        "brand": "bold color(208)",
+    }
+)
+console = Console(theme=CUSTOM_THEME)
+
+WORKSPACE_DIR = Path(__file__).resolve().parent
+DEFAULT_TARGET_PROFILE = WORKSPACE_DIR / "browser_profile"
+DEFAULT_FIREFOX_BIN = WORKSPACE_DIR / "firefox_portable" / "App" / "Firefox64" / "firefox.exe"
+DEFAULT_CHROME_BIN = WORKSPACE_DIR / "chrome_portable" / "chrome.exe"
+FLOW_HOME_URL = "https://flow.google.com/"
+
+
+def ensure_local_chrome_engine() -> Path | None:
+    """Memastikan biner peramban otomasi lokal (chrome_portable) tersedia di direktori proyek."""
+    if DEFAULT_CHROME_BIN.exists():
+        return DEFAULT_CHROME_BIN
+
+    # Jika belum ada di lokal, periksa apakah tersedia di Program Files sistem untuk disalin sebagai portabel lokal
+    sys_chrome = Path(r"C:\Program Files\Google\Chrome\Application")
+    if sys_chrome.exists() and (sys_chrome / "chrome.exe").exists():
+        console.print("[info]Menyiapkan mesin otomasi lokal mandiri (chrome_portable)...[/info]")
+        target_dir = WORKSPACE_DIR / "chrome_portable"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            # Gunakan robocopy untuk penyalinan cepat
+            cmd = f'robocopy "{sys_chrome}" "{target_dir}" /E /R:1 /W:1 >nul 2>&1'
+            subprocess.run(cmd, shell=True)
+            if DEFAULT_CHROME_BIN.exists():
+                console.print("[success]✓ Mesin peramban lokal mandiri siap digunakan.[/success]")
+                return DEFAULT_CHROME_BIN
+        except Exception:
+            pass
+
+    return None
+
+
+def save_playwright_cookies_to_firefox(
+    cookies: list[dict], profile_dir: Path = DEFAULT_TARGET_PROFILE
+) -> int:
+    """Menyimpan daftar cookies ke dalam cookies.sqlite profil Firefox Portable lokal.
+
+    Menegakkan standar Firefox Gecko 115+:
+    - Masa kedaluwarsa format milidetik 13-digit.
+    - schemeMap = 2 (HTTPS bitmask).
+    - sameSite = 256 (SAMESITE_UNSET) untuk kompatibilitas domain Google.
+    - Checkpoint SQLite WAL langsung ke file database utama.
+    """
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    db_path = profile_dir / "cookies.sqlite"
+
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+
+    # Pastikan tabel moz_cookies ada
+    if not cur.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='moz_cookies'"
+    ).fetchone():
+        cur.execute(
+            """
+            CREATE TABLE moz_cookies (
+                id INTEGER PRIMARY KEY,
+                originAttributes TEXT NOT NULL DEFAULT '',
+                name TEXT,
+                value TEXT,
+                host TEXT,
+                path TEXT,
+                expiry INTEGER,
+                lastAccessed INTEGER,
+                creationTime INTEGER,
+                isSecure INTEGER,
+                isHttpOnly INTEGER,
+                inBrowserElement INTEGER DEFAULT 0,
+                sameSite INTEGER DEFAULT 0,
+                rawSameSite INTEGER DEFAULT 0,
+                schemeMap INTEGER DEFAULT 0,
+                isPartitionedAttributeSet INTEGER DEFAULT 0,
+                updateTime INTEGER,
+                CONSTRAINT moz_uniqueid UNIQUE (name, host, path, originAttributes)
+            )
+            """
+        )
+        conn.commit()
+
+    # Hapus cookie autentikasi Google/Flow lama agar tidak tercampur
+    cur.execute(
+        "DELETE FROM moz_cookies WHERE host LIKE '%google%' OR host LIKE '%flow%' OR host LIKE '%youtube%'"
+    )
+    conn.commit()
+
+    cols = [c[1] for c in cur.execute("PRAGMA table_info(moz_cookies)").fetchall()]
+    has_same_site = "sameSite" in cols
+    has_scheme_map = "schemeMap" in cols
+    has_update_time = "updateTime" in cols
+
+    now = int(time.time())
+    now_us = now * 1000000
+
+    inserted = 0
+    for c in cookies:
+        name = c.get("name", "")
+        val = c.get("value", "")
+        domain = c.get("domain", "")
+        path = c.get("path", "/")
+        expires = c.get("expires", -1)
+        if expires is None or expires < 0:
+            expires_ms = (now + (365 * 24 * 3600)) * 1000
+        else:
+            expires_val = int(expires)
+            expires_ms = expires_val * 1000 if expires_val < 1000000000000 else expires_val
+
+        is_secure = 1 if c.get("secure") else 0
+        is_http_only = 1 if c.get("httpOnly") else 0
+
+        # Normalisasi host khusus OSID / Flow (harus host-only tanpa leading dot)
+        if name in ("OSID", "__Secure-OSID") and domain.startswith("."):
+            domain = domain.lstrip(".")
+
+        # Konfigurasi SameSite untuk Firefox Gecko (256: SAMESITE_UNSET, 0: None, 1: Lax, 2: Strict)
+        if name.startswith("__Secure-3P") or name in ("__Secure-OSID", "__Host-3PLSID"):
+            ss_val = 0
+        else:
+            ss_val = 256
+
+        scheme_map = 2  # HTTPS schemeMap bitmask
+
+        insert_cols = [
+            "originAttributes",
+            "name",
+            "value",
+            "host",
+            "path",
+            "expiry",
+            "lastAccessed",
+            "creationTime",
+            "isSecure",
+            "isHttpOnly",
+            "inBrowserElement",
+        ]
+        insert_vals = [
+            "",
+            name,
+            val,
+            domain,
+            path,
+            expires_ms,
+            now_us,
+            now_us,
+            is_secure,
+            is_http_only,
+            0,
+        ]
+
+        if has_same_site:
+            insert_cols.append("sameSite")
+            insert_vals.append(ss_val)
+        if has_scheme_map:
+            insert_cols.append("schemeMap")
+            insert_vals.append(scheme_map)
+        if has_update_time:
+            insert_cols.append("updateTime")
+            insert_vals.append(now_us)
+
+        cols_part = ", ".join(insert_cols)
+        placeholders = ", ".join(["?"] * len(insert_vals))
+        sql = f"INSERT OR REPLACE INTO moz_cookies ({cols_part}) VALUES ({placeholders})"
+        cur.execute(sql, tuple(insert_vals))
+        inserted += 1
+
+    conn.commit()
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    conn.close()
+    return inserted
+
+
+def verify_session_headless(
+    firefox_bin: Path = DEFAULT_FIREFOX_BIN,
+    profile_dir: Path = DEFAULT_TARGET_PROFILE,
+    timeout: float = 25.0,
+) -> dict:
+    """Meluncurkan Firefox Portable headless untuk memverifikasi kanvas Google Flow secara senyap."""
+    from marionette_driver import MarionetteDriver
+
+    if not firefox_bin.exists():
+        return {"success": False, "message": f"Biner Firefox tidak ditemukan di: {firefox_bin}"}
+
+    cookies_db = profile_dir / "cookies.sqlite"
+    has_google_cookie = False
+    if cookies_db.exists():
+        try:
+            conn = sqlite3.connect(str(cookies_db))
+            cur = conn.cursor()
+            cur.execute("SELECT count(*) FROM moz_cookies WHERE host LIKE '%google.com%'")
+            row = cur.fetchone()
+            count = row[0] if row else 0
+            conn.close()
+            if count > 0:
+                has_google_cookie = True
+        except Exception:
+            pass
+
+    if not has_google_cookie:
+        return {
+            "success": False,
+            "status": "fresh_install",
+            "url": "https://flow.google.com/about",
+            "message": "Profil peramban baru terpasang (kondisi bersih). Akun Google belum terhubung.",
+        }
+
+    lock = profile_dir / "parent.lock"
+    if lock.exists():
+        try:
+            lock.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    cmd = [
+        str(firefox_bin),
+        "-no-remote",
+        "-headless",
+        "-marionette",
+        "-profile",
+        str(profile_dir),
+    ]
+
+    env = os.environ.copy()
+    env["MOZ_CRASHREPORTER_DISABLE"] = "1"
+    env["MOZ_CRASHREPORTER_NO_REPORT"] = "1"
+
+    proc = subprocess.Popen(cmd, env=env)
+    driver = MarionetteDriver()
+
+    try:
+        opened = False
+        start_wait = time.time()
+        while time.time() - start_wait < 10.0:
+            if driver.is_port_open(timeout=0.5):
+                opened = True
+                break
+            time.sleep(0.3)
+
+        if not opened:
+            return {"success": False, "message": "Gagal terhubung ke port otomasi Marionette (2828)."}
+
+        driver.connect(timeout=15.0)
+        driver.navigate(FLOW_HOME_URL)
+
+        start_poll = time.time()
+        last_url = ""
+        while time.time() - start_poll < timeout:
+            time.sleep(1.5)
+            check_script = """
+            const url = window.location.href.toLowerCase();
+            const hasDashboard = !!document.querySelector('aisandbox-root, flow-project-shell, flow-prompt-box, .project-card, [data-test-id="project-card"]');
+            const isAuth = url.includes('accounts.google.com') || url.includes('/about');
+            return {
+                url: window.location.href,
+                title: document.title,
+                hasDashboard: hasDashboard,
+                isAuth: isAuth,
+                loggedIn: hasDashboard && !url.includes('/about')
+            };
+            """
+            try:
+                state = driver.execute_script(check_script)
+                if isinstance(state, dict):
+                    last_url = state.get("url", "")
+                    if state.get("loggedIn"):
+                        return {
+                            "success": True,
+                            "url": last_url,
+                            "title": state.get("title", ""),
+                            "message": "Berhasil terotentikasi di Google Flow!",
+                        }
+                    if "/about" in last_url.lower():
+                        return {
+                            "success": False,
+                            "status": "not_logged_in",
+                            "url": last_url,
+                            "title": state.get("title", ""),
+                            "message": "Akun Google belum masuk (halaman informasi publik flow.google.com/about).",
+                        }
+                    if state.get("isAuth") and "accounts.google.com" in last_url:
+                        return {
+                            "success": False,
+                            "status": "not_logged_in",
+                            "url": last_url,
+                            "title": state.get("title", ""),
+                            "message": "Sesi belum aktif (berada di halaman login accounts.google.com).",
+                        }
+            except Exception:
+                pass
+
+        return {
+            "success": False,
+            "status": "timeout",
+            "url": last_url,
+            "message": "Waktu tunggu habis saat memuat kanvas Google Flow.",
+        }
+
+    finally:
+        driver.close()
+        try:
+            proc.terminate()
+            proc.wait(timeout=5)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+
+def automated_google_login(
+    email: str | None = None,
+    password: str | None = None,
+    profile_dir: Path = DEFAULT_TARGET_PROFILE,
+) -> bool:
+    """Melakukan otomatisasi penuh login Google Flow secara 100% Full CLI."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        console.print("[error]✗ Pustaka playwright belum terpasang. Jalankan: pip install playwright[/error]")
+        return False
+
+    chrome_bin = ensure_local_chrome_engine()
+    if not chrome_bin or not chrome_bin.exists():
+        console.print("[error]✗ Biner mesin otomasi mandiri (chrome_portable) tidak ditemukan.[/error]")
+        return False
+
+    console.print(
+        Panel(
+            "[bold green]OTOMASI LOGIN GOOGLE FLOW (100% FULL CLI)[/bold green]\n\n"
+            "• Sesi berjalan 100% senyap di latar belakang (mode headless murni).\n"
+            "• Tanpa pop-up jendela peramban manual, tanpa menyentuh data browser pribadi.\n"
+            "• Mendukung deteksi otomatis verifikasi 2-Langkah (2FA) di ponsel Anda.\n"
+            "• Token sesi disimpan langsung ke [cyan]browser_profile/cookies.sqlite[/cyan] lokal proyek.",
+            box=box.ROUNDED,
+            title="[cyan]Google Flow CLI Authenticator[/cyan]",
+        )
+    )
+
+    if not email:
+        email = Prompt.ask("[cyan]Masukkan Email Google Anda[/cyan]")
+    if not password:
+        password = Prompt.ask("[cyan]Masukkan Kata Sandi Google[/cyan]", password=True)
+
+    if not email or not password:
+        console.print("[error]✗ Email dan sandi wajib diisi.[/error]")
+        return False
+
+    console.print("\n[info]Memulai mesin peramban otomasi lokal mandiri (Full CLI)...[/info]")
+
+    with sync_playwright() as p:
+        try:
+            launch_kwargs = {
+                "headless": True,
+                "executable_path": str(chrome_bin),
+                "args": [
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                ],
+            }
+
+            browser = p.chromium.launch(**launch_kwargs)
+            context = browser.new_context(
+                viewport={"width": 1280, "height": 800},
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
+            )
+            page = context.new_page()
+
+            console.print("[info]Membuka portal Google Sign-In...[/info]")
+            page.goto(
+                "https://accounts.google.com/signin/v2/identifier?continue=https://flow.google.com/",
+                wait_until="domcontentloaded",
+            )
+
+            # Cek jika layar menampilkan pilihan akun yang sudah ada sebelumnya
+            if not page.query_selector("#identifierId"):
+                use_another = page.query_selector(
+                    "div:has-text('Use another account'), div:has-text('Gunakan akun lain')"
+                )
+                if use_another and use_another.is_visible():
+                    use_another.click()
+                    time.sleep(2)
+
+            page.wait_for_selector("#identifierId", timeout=20000)
+
+            # 1. Ketik email dengan jeda manusiawi
+            console.print(f"[info]Mengisi email:[/info] [cyan]{email}[/cyan]")
+            for ch in email:
+                page.type("#identifierId", ch, delay=random.randint(30, 80))
+            time.sleep(0.5)
+
+            console.print("[info]Mengirim formulir email...[/info]")
+            page.press("#identifierId", "Enter")
+            time.sleep(1)
+            next_btn = page.query_selector("#identifierNext button, #identifierNext, button[jsname='LgbsSe']")
+            if next_btn and next_btn.is_visible():
+                try:
+                    next_btn.click()
+                except Exception:
+                    pass
+            time.sleep(4)
+
+            # Evaluasi respons email
+            if "signin/rejected" in page.url:
+                console.print(
+                    "[error]✗ Google menolak akses (signin/rejected). Lingkungan belum memenuhi kriteria attestation.[/error]"
+                )
+                browser.close()
+                return False
+
+            body_text = page.inner_text("body")
+            if (
+                "Couldn’t find your Google Account" in body_text
+                or "Tidak dapat menemukan Akun Google" in body_text
+            ):
+                console.print(f"[error]✗ Akun Google '{email}' tidak ditemukan.[/error]")
+                browser.close()
+                return False
+
+            if "Account deleted" in body_text or "Akun dihapus" in body_text:
+                console.print(f"[error]✗ Akun Google '{email}' telah dinonaktifkan/dihapus.[/error]")
+                browser.close()
+                return False
+
+            # 2. Tunggu field kata sandi
+            console.print("[info]Menunggu formulir kata sandi...[/info]")
+            pwd_sel = 'input[type="password"]:not([name="hiddenPassword"]), input[name="Passwd"]'
+            page.wait_for_selector(pwd_sel, timeout=20000)
+
+            console.print("[info]Mengisi kata sandi secara aman...[/info]")
+            for ch in password:
+                page.type(pwd_sel, ch, delay=random.randint(30, 80))
+            time.sleep(0.5)
+
+            console.print("[info]Mengirim kata sandi...[/info]")
+            page.press(pwd_sel, "Enter")
+            time.sleep(1)
+            pwd_next = page.query_selector("#passwordNext button, #passwordNext, button[jsname='LgbsSe']")
+            if pwd_next and pwd_next.is_visible():
+                try:
+                    pwd_next.click()
+                except Exception:
+                    pass
+            time.sleep(5)
+
+            # Evaluasi respons kata sandi
+            body_post_pwd = page.inner_text("body")
+            if "Wrong password" in body_post_pwd or "Sandi salah" in body_post_pwd:
+                console.print("[error]✗ Kata sandi yang Anda masukkan salah.[/error]")
+                browser.close()
+                return False
+
+            # 3. Penanganan Verifikasi 2FA / Device Challenge
+            notified_2fa = False
+            start_wait_auth = time.time()
+            max_timeout = 120.0
+
+            with console.status(
+                "[bold cyan]Menunggu konfirmasi autentikasi Google Flow...[/bold cyan]",
+                spinner="dots",
+            ):
+                while time.time() - start_wait_auth < max_timeout:
+                    try:
+                        curr_url = page.url
+                        parsed = urlparse(curr_url)
+
+                        if "signin/rejected" in curr_url:
+                            console.print(
+                                "\n[error]✗ Google menolak akses (signin/rejected).[/error]"
+                            )
+                            browser.close()
+                            return False
+
+                        if "myaccount.google.com" in curr_url:
+                            try:
+                                page.goto(FLOW_HOME_URL, wait_until="commit")
+                            except Exception:
+                                pass
+                            time.sleep(2)
+                            continue
+
+                        is_flow_canvas = (
+                            parsed.netloc == "flow.google.com"
+                            or parsed.netloc.endswith(".flow.google.com")
+                        ) and not parsed.path.startswith("/about")
+
+                        if is_flow_canvas:
+                            console.print("\n[success]✓ BERHASIL TERAUTENTIKASI DI GOOGLE FLOW![/success]")
+                            time.sleep(3)
+                            cookies = context.cookies()
+                            saved_count = save_playwright_cookies_to_firefox(cookies, profile_dir)
+                            console.print(
+                                f"[success]✓ {saved_count} token cookie berhasil disimpan ke [cyan]browser_profile/cookies.sqlite[/cyan]![/success]"
+                            )
+                            browser.close()
+
+                            console.print("[info]Memverifikasi sesi pada Firefox Portable lokal...[/info]")
+                            ver = verify_session_headless()
+                            _print_verify_result(ver)
+                            return True
+
+                        # Lewati dialog opsional Google seperti 'Not now'
+                        skip_btn = page.query_selector(
+                            "button:has-text('Not now'), button:has-text('Jangan sekarang'), button:has-text('Skip'), button:has-text('Lewati')"
+                        )
+                        if skip_btn and skip_btn.is_visible():
+                            try:
+                                skip_btn.click()
+                                time.sleep(2)
+                            except Exception:
+                                pass
+
+                        # Cek 2FA PIN
+                        pin_input = page.query_selector(
+                            "input#idvPin, input[name='Pin'], input[type='tel'], input#totpPin"
+                        )
+                        if pin_input and pin_input.is_visible():
+                            console.print("\n[gold]📱 Google meminta 6-digit kode verifikasi (SMS / Authenticator):[/gold]")
+                            code = Prompt.ask("[cyan]Masukkan Kode Verifikasi[/cyan]")
+                            pin_input.fill(code.strip())
+                            pin_next = page.query_selector(
+                                "#idvPreregisteredPhoneNext, #totpNext, button[jsname='LgbsSe']"
+                            )
+                            if pin_next:
+                                pin_next.click()
+                            else:
+                                page.keyboard.press("Enter")
+                            time.sleep(4)
+                            continue
+
+                        # Cek recovery email
+                        rec_input = page.query_selector(
+                            "input#knowledge-preregistered-email-response, input[name='knowledgePreregisteredEmailResponse']"
+                        )
+                        if rec_input and rec_input.is_visible():
+                            console.print("\n[gold]📧 Google meminta konfirmasi email pemulihan:[/gold]")
+                            rec_val = Prompt.ask("[cyan]Masukkan Email Pemulihan[/cyan]")
+                            rec_input.fill(rec_val.strip())
+                            rec_input.press("Enter")
+                            time.sleep(3)
+                            continue
+
+                        # Cek notifikasi ponsel
+                        page_text = page.inner_text("body")
+                        is_2fa_screen = any(
+                            kw in page_text.lower()
+                            for kw in [
+                                "check your",
+                                "periksa ponsel",
+                                "periksa tablet",
+                                "ketuk ya",
+                                "tap yes",
+                                "2-step",
+                                "2 langkah",
+                                "verifikasi 2 langkah",
+                                "verifikasi perangkat",
+                                "google sent a notification",
+                                "google mengirim notifikasi",
+                                "mengirimkan notifikasi",
+                                "pilih angka",
+                                "select the number",
+                                "verify it's you",
+                                "verifikasi bahwa ini memang anda",
+                            ]
+                        )
+
+                        if is_2fa_screen and not notified_2fa:
+                            notified_2fa = True
+                            match_num = None
+                            for sel in [
+                                ".f9UGee",
+                                "div[data-number]",
+                                "div[data-challengeinfo] div",
+                                "span[data-number]",
+                                "span[jsname='V67aGc']",
+                                "div.BqLWCe",
+                            ]:
+                                try:
+                                    for el_num in page.query_selector_all(sel):
+                                        txt = el_num.inner_text().strip()
+                                        if txt.isdigit() and 1 <= len(txt) <= 3:
+                                            match_num = txt
+                                            break
+                                except Exception:
+                                    pass
+                                if match_num:
+                                    break
+
+                            if not match_num:
+                                m = re.search(
+                                    r"(?:ketuk|tap|pilih|choose|select|angka|nomor)\s*[:\s]*(\d{1,3})\b",
+                                    page_text,
+                                    re.IGNORECASE,
+                                )
+                                if m:
+                                    match_num = m.group(1)
+
+                            panel_msg = (
+                                "[bold yellow]📱 KONFIRMASI VERIFIKASI 2-LANGKAH (2FA) GOOGLE[/bold yellow]\n\n"
+                                "Google mengirimkan permintaan verifikasi ke ponsel/perangkat Anda.\n"
+                            )
+                            if match_num:
+                                panel_msg += (
+                                    f"[white]Silakan buka ponsel Anda, ketuk [bold green]Ya[/bold green], "
+                                    f"dan pilih angka:[/white] [bold gold underline] {match_num} [/bold gold underline]\n"
+                                )
+                            else:
+                                panel_msg += "[white]Silakan buka ponsel Anda dan ketuk [bold green]Ya, itu saya[/bold green].[/white]\n"
+
+                            panel_msg += "\n[muted]Terminal memantau persetujuan secara otomatis...[/muted]"
+                            console.print(
+                                Panel(panel_msg, box=box.ROUNDED, title="[yellow]Aksi Pengguna Diperlukan[/yellow]")
+                            )
+
+                    except Exception:
+                        time.sleep(1.5)
+                        continue
+
+                    time.sleep(2.0)
+
+            console.print("[error]✗ Waktu tunggu autentikasi habis (melebihi 2 menit).[/error]")
+            browser.close()
+            return False
+
+        except Exception as err:
+            console.print(f"[error]✗ Terjadi kesalahan pada alur otomatisasi:[/error] {err}")
+            return False
+
+
+def _print_verify_result(res: dict) -> None:
+    """Mencetak panel hasil verifikasi sesi ke terminal."""
+    if res["success"]:
+        console.print(
+            Panel(
+                f"[bold green]✓ SESI GOOGLE FLOW AKTIF & TERVERIFIKASI![/bold green]\n\n"
+                f"URL Kanvas : [cyan]{res.get('url', '-')}[/cyan]\n"
+                f"Judul Tab  : [white]{res.get('title', '-')}[/white]\n\n"
+                "[muted]Firefox Portable lokal siap digunakan secara senyap (headless).[/muted]",
+                box=box.ROUNDED,
+                title="[green]Status Autentikasi Headless[/green]",
+            )
+        )
+    else:
+        console.print(
+            Panel(
+                f"[bold yellow]ℹ AKUN GOOGLE BELUM TERHUBUNG KE PERAMBAN LOKAL[/bold yellow]\n\n"
+                f"Kondisi : [white]{res.get('message', 'Sesi Google belum terpasang.')}[/white]\n"
+                f"URL     : [cyan]{res.get('url', '-')}[/cyan]\n\n"
+                "[bold green]Langkah Berikutnya:[/bold green] Jalankan `python login.py` untuk menghubungkan akun Google Anda.",
+                box=box.ROUNDED,
+                title="[yellow]Status Akun Google Flow[/yellow]",
+            )
+        )
+
+
+def main() -> int:
+    """Titik masuk CLI autentikasi tunggal (Full CLI)."""
+    parser = argparse.ArgumentParser(
+        description="Google Flow Full CLI Authenticator for Firefox Stealth Automation."
+    )
+    parser.add_argument(
+        "--email",
+        type=str,
+        help="Email akun Google untuk login otomatis",
+    )
+    parser.add_argument(
+        "--password",
+        type=str,
+        help="Kata sandi akun Google untuk login otomatis",
+    )
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="Uji keabsahan sesi Google Flow di background tanpa melakukan login",
+    )
+
+    args = parser.parse_args()
+
+    if args.verify:
+        console.print("[info]ℹ Menguji status sesi Google Flow di latar belakang (mode headless)...[/info]")
+        res = verify_session_headless()
+        _print_verify_result(res)
+        return 0 if res["success"] else 1
+
+    success = automated_google_login(email=args.email, password=args.password)
+    return 0 if success else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

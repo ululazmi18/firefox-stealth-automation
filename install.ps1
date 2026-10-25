@@ -78,10 +78,28 @@ Write-Host "[5/5] Memasang dependensi Python & mengonfigurasi Firefox Portable..
 & $pythonCmd -m pip install -r requirements.txt --quiet
 & $pythonCmd setup_browser.py
 
+# 6. PERIKSA STATUS SESI GOOGLE FLOW (FULL CLI LOGIN)
+Write-Host ""
+Write-Host "[6/6] Memeriksa status akun Google Flow..." -ForegroundColor Yellow
+& $pythonCmd login.py --verify
+if ($LASTEXITCODE -ne 0) {
+    Write-Host ""
+    Write-Host " [INFO] Akun Google belum terhubung di peramban lokal ini." -ForegroundColor Cyan
+    Write-Host " Otomasi siap menghubungkannya: Cukup masukkan email & sandi di terminal." -ForegroundColor White
+    $doLogin = Read-Host "Apakah Anda ingin menghubungkan akun Google Flow sekarang? (Y/n)"
+    if ($doLogin -ne "n" -and $doLogin -ne "N") {
+        & $pythonCmd login.py
+    }
+}
+
 Write-Host ""
 Write-Host "==============================================================================" -ForegroundColor Green
 Write-Host " ✓ INSTALASI & BOOTSTRAP FIREFOX STEALTH SELESAI & SIAP DIGUNAKAN!" -ForegroundColor Green
 Write-Host "==============================================================================" -ForegroundColor Green
-Write-Host " Anda dapat menjalankan audit benchmark anti-bot kapan saja dengan:" -ForegroundColor Cyan
-Write-Host " python harness_audit.py --run-id uji_awal" -ForegroundColor Yellow
+Write-Host " Hubungkan akun Google kapan saja via CLI:" -ForegroundColor Cyan
+Write-Host "   python login.py" -ForegroundColor Yellow
+Write-Host " Periksa status sesi:" -ForegroundColor Cyan
+Write-Host "   python login.py --verify" -ForegroundColor Yellow
+Write-Host " Audit benchmark anti-bot:" -ForegroundColor Cyan
+Write-Host "   python harness_audit.py --run-id uji_awal" -ForegroundColor Yellow
 Write-Host "==============================================================================" -ForegroundColor Green
