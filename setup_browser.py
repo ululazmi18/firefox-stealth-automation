@@ -45,8 +45,28 @@ OFFICIAL_DOWNLOAD_URL = (
     "https://archive.mozilla.org/pub/firefox/releases/115.19.0esr/win64/en-US/Firefox%20Setup%20115.19.0esr.exe"
 )
 FALLBACK_DOWNLOAD_URL = (
-    "https://download2.portableapps.com/portableapps/FirefoxPortable/FirefoxPortable_158.0_English.paf.exe"
+    "https://ftp.mozilla.org/pub/firefox/releases/115.19.0esr/win64/en-US/Firefox%20Setup%20115.19.0esr.exe"
 )
+
+
+def _safe_move(src: Path, dst: Path, retries: int = 10, delay: float = 0.3) -> bool:
+    """Memindahkan berkas biner secara aman di Windows dengan penanganan lock antivirus/proses lain."""
+    import gc
+    gc.collect()
+    for _ in range(retries):
+        try:
+            if dst.exists():
+                dst.unlink()
+            src.rename(dst)
+            return True
+        except (PermissionError, OSError):
+            time.sleep(delay)
+    try:
+        shutil.copy2(src, dst)
+        src.unlink(missing_ok=True)
+        return True
+    except Exception:
+        return False
 
 
 def get_firefox_executable(portable_dir: Path | None = None) -> Path | None:
@@ -90,6 +110,15 @@ def download_file(url: str, dest_path: Path, max_retries: int = 5) -> bool:
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = dest_path.with_name(dest_path.stem + ".downloading")
 
+    # Jika berkas unduhan lengkap sudah ada di temp_path (misal dari percobaan sebelumnya)
+    if temp_path.exists() and temp_path.stat().st_size >= 50 * 1024 * 1024:
+        if _safe_move(temp_path, dest_path):
+            console.print(
+                f"[success]✓ Berkas installer sudah lengkap terunduh:[/success] {dest_path.name} "
+                f"({dest_path.stat().st_size // (1024*1024)} MB)"
+            )
+            return True
+
     console.print(f"[info]ℹ[/info] Menghubungi server CDN: [cyan]{url}[/cyan]")
 
     urls_to_try = [url]
@@ -98,10 +127,21 @@ def download_file(url: str, dest_path: Path, max_retries: int = 5) -> bool:
 
     for current_url in urls_to_try:
         for attempt in range(1, max_retries + 1):
+            session = None
+            resp = None
             try:
                 existing_bytes = 0
                 if temp_path.exists():
                     existing_bytes = temp_path.stat().st_size
+
+                # Jika berkas sudah berukuran penuh (minimal 50 MB), langsung pindahkan
+                if existing_bytes >= 50 * 1024 * 1024:
+                    if _safe_move(temp_path, dest_path):
+                        console.print(
+                            f"[success]✓ Pengunduhan selesai:[/success] {dest_path.name} "
+                            f"({dest_path.stat().st_size // (1024*1024)} MB)"
+                        )
+                        return True
 
                 headers = {}
                 if existing_bytes > 0:
@@ -120,6 +160,19 @@ def download_file(url: str, dest_path: Path, max_retries: int = 5) -> bool:
                     headers=headers,
                     timeout=30,
                 )
+
+                # Tangani HTTP 416 (Range Not Satisfiable) jika file sudah komplit
+                if resp.status_code == 416:
+                    if temp_path.exists() and temp_path.stat().st_size >= 50 * 1024 * 1024:
+                        if _safe_move(temp_path, dest_path):
+                            console.print(
+                                f"[success]✓ Pengunduhan selesai:[/success] {dest_path.name} "
+                                f"({dest_path.stat().st_size // (1024*1024)} MB)"
+                            )
+                            return True
+                    if temp_path.exists():
+                        temp_path.unlink(missing_ok=True)
+                    continue
 
                 is_resume = (resp.status_code == 206)
                 if not is_resume:
@@ -153,20 +206,39 @@ def download_file(url: str, dest_path: Path, max_retries: int = 5) -> bool:
                                 f.write(chunk)
                                 progress.update(task, advance=len(chunk))
 
-                # Verifikasi ukuran akhir (minimal 50 MB untuk installer Firefox)
+                # Tutup session dan response agar tidak ada file handle yang tertahan di Windows
+                try:
+                    resp.close()
+                except Exception:
+                    pass
+                try:
+                    session.close()
+                except Exception:
+                    pass
+
+                # Verifikasi ukuran akhir dan pindahkan dengan penanganan lock Windows
                 if temp_path.exists() and temp_path.stat().st_size >= 50 * 1024 * 1024:
-                    if dest_path.exists():
-                        dest_path.unlink()
-                    temp_path.rename(dest_path)
-                    console.print(
-                        f"[success]✓ Pengunduhan selesai:[/success] {dest_path.name} "
-                        f"({dest_path.stat().st_size // (1024*1024)} MB)"
-                    )
-                    return True
+                    if _safe_move(temp_path, dest_path):
+                        console.print(
+                            f"[success]✓ Pengunduhan selesai:[/success] {dest_path.name} "
+                            f"({dest_path.stat().st_size // (1024*1024)} MB)"
+                        )
+                        return True
 
             except Exception as err:
                 console.print(f"[warning]⚠ Gangguan koneksi ({err}). Menyambung ulang dalam 2 detik...[/warning]")
                 time.sleep(2)
+            finally:
+                if resp is not None:
+                    try:
+                        resp.close()
+                    except Exception:
+                        pass
+                if session is not None:
+                    try:
+                        session.close()
+                    except Exception:
+                        pass
 
     console.print("[error]✗ Batas percobaan pengunduhan habis. Periksa koneksi internet Anda.[/error]")
     return False
