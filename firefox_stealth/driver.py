@@ -239,6 +239,10 @@ class MarionetteDriver:
             return res.get("value", [])
         return []
 
+    def get_window_handles(self) -> List[str]:
+        """Metode pembantu kompatibilitas untuk mendapatkan daftar window handles."""
+        return self.window_handles
+
     @property
     def current_window_handle(self) -> str:
         """ID handle jendela/tab yang sedang aktif saat ini."""
@@ -389,9 +393,17 @@ class MarionetteDriver:
         """Mengirimkan event klik native Gecko ke elemen web sasaran."""
         self.send("WebDriver:ElementClick", {"id": element_id})
 
+    def click_element(self, element_id: str) -> None:
+        """Alias kompatibilitas untuk element_click."""
+        self.element_click(element_id)
+
     def element_send_keys(self, element_id: str, text: str) -> None:
         """Mengirimkan rentetan pengetikan teks ke elemen input sasaran."""
         self.send("WebDriver:ElementSendKeys", {"id": element_id, "text": text})
+
+    def send_keys(self, element_id: str, text: str) -> None:
+        """Alias kompatibilitas untuk element_send_keys."""
+        self.element_send_keys(element_id, text)
 
     def element_clear(self, element_id: str) -> None:
         """Mengosongkan teks pada elemen input sasaran."""
