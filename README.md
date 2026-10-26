@@ -95,57 +95,65 @@ python harness_audit.py --run-id verifikasi_1
 
 ---
 
-## 💻 Penggunaan Driver Python (`marionette_driver.py`)
+## 💻 Penggunaan Modul Python (`firefox_stealth`)
 
-Gunakan modul `MarionetteDriver` untuk mengontrol peramban secara senyap dalam skrip otomasi Anda sendiri:
+Paket `firefox_stealth` dirancang dengan arsitektur modular **Separation of Concerns (SoC)** dan standar kemasan **PEP 517/518/621**. Modul ini menyediakan dua gaya penggunaan: *High-Level Context Manager* (`StealthBrowser`) dan *Low-Level Socket Client* (`MarionetteDriver`).
+
+### 1. Gaya High-Level (`StealthBrowser` — Direkomendasikan)
+Mengelola siklus hidup proses peramban, port TCP, handshake, serta penutupan sesi secara otomatis dan bersih (*auto-cleanup*):
 
 ```python
-import subprocess
-import time
-from pathlib import Path
-from marionette_driver import MarionetteDriver
+from firefox_stealth import StealthBrowser
 
-# 1. Jalankan Firefox Portable (Headless atau GUI)
-ff_bin = Path("firefox_portable/App/Firefox64/firefox.exe")
-profile_dir = Path("browser_profile")
+# Jalankan peramban headless secara senyap
+with StealthBrowser(headless=True) as browser:
+    # 1. Navigasi ke target web
+    browser.navigate("https://bot-detector.rebrowser.net")
 
-cmd = [
-    str(ff_bin),
-    "-no-remote",
-    "-headless",         # Hapus argumen ini jika ingin melihat jendela browser
-    "-marionette",
-    "-profile",
-    str(profile_dir),
-]
-proc = subprocess.Popen(cmd)
+    # 2. Periksa status navigasi dan neutralisasi anti-bot
+    webdriver_state = browser.execute_script("return navigator.webdriver;")
+    page_title = browser.execute_script("return document.title;")
+    print(f"Halaman: {page_title} | navigator.webdriver: {webdriver_state}")
 
-time.sleep(2)  # Tunggu port 2828 siap
+    # 3. Tangkap visual viewport dalam format PNG bytes
+    screenshot_bytes = browser.take_screenshot()
+    with open("hasil_uji.png", "wb") as f:
+        f.write(screenshot_bytes)
+```
 
-# 2. Hubungkan driver (Otomatis menginjeksi stealth WebExtension bridge)
+### 2. Gaya Low-Level (`MarionetteDriver`)
+Untuk integrasi tingkat lanjut di mana proses peramban dikontrol secara terpisah:
+
+```python
+from firefox_stealth import MarionetteDriver
+
 driver = MarionetteDriver(host="127.0.0.1", port=2828)
 driver.connect()
 
-# 3. Navigasi & Interaksi Web
-driver.navigate("https://bot-detector.rebrowser.net")
-time.sleep(4)
+# Interaksi elemen tanpa menyentuh kursor fisik OS (Zero Cursor Hijacking)
+elem_id = driver.find_element(using="css selector", value="input[name='q']")
+driver.send_keys(elem_id, "Firefox Stealth Automation\n")
 
-# 4. Evaluasi Status Stealth
-result = driver.execute_script("""
-return {
-    webdriver: navigator.webdriver,
-    title: document.title
-};
-""")
-print("Status Otomasi:", result)  # {'webdriver': False, 'title': '...'}
-
-# 5. Ambil Screenshot
-png_bytes = driver.take_screenshot(full=False)
-Path("screenshot.png").write_bytes(png_bytes)
-
-# 6. Tutup Sesi
 driver.close()
-proc.terminate()
 ```
+
+---
+
+## 🌐 Ekosistem & Integrasi Proyek Terkait
+
+`firefox-stealth-automation` berfungsi sebagai fondasi mesin peramban anti-deteksi bot untuk aplikasi hilir (*downstream apps*). 
+
+* 🎨 **[Google Flow Image Generator (image-generator)](https://github.com/ululazmi18/image-generator):**
+  Aplikasi otomasi pembuatan gambar AI 100% senyap berbasis Google Flow. `image-generator` memanfaatkan `firefox_stealth.MarionetteDriver` untuk mengirimkan prompt via ProseMirror DOM, memantau kanvas, dan mengunduh hasil gambar 1K tanpa memblokir kursor pengguna.
+  
+  **Integrasi Berdampingan (Side-by-Side):**
+  Cukup letakkan kedua repositori berdampingan dalam satu folder workspace:
+  ```text
+  workspace/
+  ├── firefox-stealth-automation/    # Mesin browser & penyimpanan profil/sesi login
+  └── image-generator/               # Aplikasi otomasi generasi gambar
+  ```
+  `image-generator` secara otomatis mendeteksi biner `firefox_portable` dan sesi login `browser_profile` dari repositori ini tanpa perlu konfigurasi manual!
 
 ---
 
@@ -153,12 +161,22 @@ proc.terminate()
 
 ```text
 firefox-stealth-automation/
+├── firefox_stealth/           # Paket Modul Python Utama (PEP 517/518/621 & SoC)
+│   ├── __init__.py            # Titik masuk publik (StealthBrowser, MarionetteDriver, dll.)
+│   ├── browser.py             # Pengontrol siklus hidup peramban StealthBrowser
+│   ├── driver.py              # Klien soket protokol Marionette JSON Wire native
+│   ├── exceptions.py          # Hierarki pengecualian terstruktur (MarionetteError)
+│   └── profile.py             # Generator konfigurasi hardening prefs.js & user.js
+├── tests/                     # Rangkaian pengujian unit otomatis
+│   ├── test_browser.py
+│   ├── test_driver.py
+│   └── test_profile.py
 ├── stealth_addon/             # Native Gecko WebExtension Stealth Bridge
 │   ├── manifest.json          # Manifest WebExtension V2
 │   └── stealth.js             # Injeksi exportFunction/cloneInto di Navigator.prototype
-├── marionette_driver.py       # Klien Python murni Marionette Wire Protocol
-├── setup_browser.py           # CLI bootstrapper installer Firefox & Chrome Portable otomatis
-├── login.py                   # Standalone Full CLI Google Flow login & 2FA authentication engine
+├── pyproject.toml             # Konfigurasi packaging modern PEP 517/518/621
+├── setup_browser.py           # CLI bootstrapper installer Firefox Portable otomatis
+├── login.py                   # Standalone Full CLI Google Flow & OAuth 2FA login engine
 ├── harness_audit.py           # QA multi-site benchmark audit suite (17 situs deteksi)
 ├── REPORT.md                  # Laporan teknis final & analisis empiris komparatif
 ├── requirements.txt           # Dependensi modul (rich, curl_cffi)
@@ -179,3 +197,4 @@ Framework ini dirancang untuk tujuan pengujian jaminan kualitas (**QA Automation
 
 Didistribusikan di bawah lisensi **MIT License**. Lihat [LICENSE](LICENSE) untuk informasi lebih lanjut.
 Dibuat oleh [Ulul Azmi](https://github.com/ululazmi18).
+
