@@ -75,7 +75,18 @@ python setup_browser.py
 ```
 *Skrip ini akan memeriksa ketersediaan biner, mengunduh dari CDN PortableApps resmi (dengan fitur auto-resume & perpanjangan timeout), mengekstraknya menggunakan 7-Zip, dan menyiapkan direktori profil `browser_profile/` yang telah di-hardening anti-deteksi bot.*
 
-### 3. Menjalankan Suite Audit 17 Situs Benchmark
+### 3. Autentikasi Google Flow Headless (`login.py`)
+Hubungkan akun Google langsung dari baris perintah terminal tanpa membuka browser manual:
+```powershell
+# Jalankan login interaktif Full CLI
+python login.py
+
+# Atau sertakan kredensial langsung via argumen CLI
+python login.py --email akun@gmail.com --password "KataSandiAnda"
+```
+*Fitur ini berjalan 100% senyap di latar belakang, menangani prompt 2FA/notifikasi perangkat ponsel, dan mengekspor token sesi langsung ke `browser_profile/cookies.sqlite`.*
+
+### 4. Menjalankan Suite Audit 17 Situs Benchmark
 Jalankan harness pengujian untuk memverifikasi jejak otomasi kapan saja:
 ```powershell
 python harness_audit.py --run-id verifikasi_1
@@ -146,7 +157,8 @@ firefox-stealth-automation/
 │   ├── manifest.json          # Manifest WebExtension V2
 │   └── stealth.js             # Injeksi exportFunction/cloneInto di Navigator.prototype
 ├── marionette_driver.py       # Klien Python murni Marionette Wire Protocol
-├── setup_browser.py           # CLI bootstrapper installer Firefox Portable otomatis
+├── setup_browser.py           # CLI bootstrapper installer Firefox & Chrome Portable otomatis
+├── login.py                   # Standalone Full CLI Google Flow login & 2FA authentication engine
 ├── harness_audit.py           # QA multi-site benchmark audit suite (17 situs deteksi)
 ├── REPORT.md                  # Laporan teknis final & analisis empiris komparatif
 ├── requirements.txt           # Dependensi modul (rich, curl_cffi)
