@@ -6,6 +6,8 @@ temp_firefox_installer.paf.exe
 
 # Browser Profile (Sensitive: logins, cookies, storage)
 browser_profile/
+cloned_profile/
+temp_chrome.zip
 
 # Test Artifacts, Reports & Screenshots
 reports/

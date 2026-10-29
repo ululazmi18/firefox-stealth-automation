@@ -5,8 +5,11 @@
 [![Protocol](https://img.shields.io/badge/protocol-Marionette%20Socket%20(No%20CDP)-green.svg)](https://firefox-source-docs.mozilla.org/testing/marionette/)
 [![License](https://img.shields.io/badge/license-MIT-purple.svg)](LICENSE)
 [![Bot Detection](https://img.shields.io/badge/bot%20detection-17%20Benchmarks%20Hardened-success.svg)](REPORT.md)
+[![Package Ready](https://img.shields.io/badge/package-pip%20installable-brightgreen.svg)](pyproject.toml)
 
-Framework otomasi peramban mandiri (*standalone*) berbasis **Mozilla Firefox Portable Edition** yang dikeraskan (*hardened*) secara bertahap untuk meminimalkan sinyal deteksi otomasi dan fingerprinting pada **17 situs benchmark deteksi bot terkemuka** (SannySoft, DeviceAndBrowserInfo, Rebrowser, BrowserScan, IPFighter, CreepJS, BrowserLeaks, dll.).
+Framework otomasi peramban mandiri (*standalone*) berbasis **Mozilla Firefox Portable Edition** yang dikeraskan (*hardened*) secara native untuk meminimalkan sinyal deteksi otomasi dan fingerprinting pada **17 situs benchmark deteksi bot terkemuka** (SannySoft, DeviceAndBrowserInfo, Rebrowser, BrowserScan, IPFighter, CreepJS, BrowserLeaks, dll.).
+
+Dilengkapi dengan **sistem isolasi profil browser privat per-proyek** (*Project-Isolated Profiles*), memungkinkan penyimpanan sesi, login akun Google/web, dan cookies tersimpan aman di direktori lokal masing-masing proyek tanpa saling mencemari atau bercampur dengan proyek lainnya di direktori mana pun.
 
 ---
 
@@ -20,9 +23,9 @@ Otomasi berbasis Chromium (Puppeteer, Playwright default, Selenium Chrome) renta
 ### Keunggulan Arsitektur Gecko Stealth Ini:
 * **Bebas Kebocoran CDP (100% Passed):** Menggunakan native socket TCP Marionette (`127.0.0.1:2828`). Gecko tidak menggunakan CDP sehingga terbebas dari artefak runtime evaluation Chromium.
 * **Neutralisasi `navigator.webdriver`:** WebExtension Stealth Bridge native Gecko menyamarkan `Navigator.prototype.webdriver` menjadi `false` (dengan status `[native code]`, `enumerable: true`, `configurable: true`) pada window utama maupun seluruh dynamic iframe.
-* **WebRTC Leak Protection:** Kebocoran IP via STUN dinonaktifkan secara native di level profil peramban.
+* **Isolasi Profil Privat per Proyek:** Setiap proyek memiliki direktori `browser_profile` lokalnya sendiri. Token sesi dan cookie tersimpan terisolasi di folder proyek pemanggil.
 * **Zero External Drivers:** Tidak memerlukan executable binary `geckodriver.exe` eksternal. Klien Python murni berkomunikasi langsung dengan soket JSON wire protocol Gecko.
-* **Portabel & Mandiri:** CLI bootstrapper mengunduh dan mengekstrak Firefox Portable resmi secara otomatis tanpa dialog GUI.
+* **Self-Healing Locks:** Otomatis mendeteksi dan membersihkan berkas lockfile yatim (`parent.lock`) dari sesi crash tanpa memicu galat "Firefox is already running".
 
 ---
 
@@ -43,117 +46,117 @@ Berdasarkan pengujian empiris 3x run berturut-turut pada 17 situs benchmark bot 
 
 ---
 
-## 🚀 Panduan Memulai Cepat (Quickstart)
+## 📦 Pemasangan Modul Python (Siap Pakai di Proyek Mana Pun)
 
-### ⚡ Cara Termudah: 1 Baris Perintah PowerShell (Otomatis Penuh)
-Cukup buka terminal PowerShell dan jalankan **1 baris perintah** berikut:
-```powershell
-irm https://raw.githubusercontent.com/ululazmi18/firefox-stealth-automation/main/install.ps1 | iex
-```
-*Skrip ini akan otomatis memeriksa & memasang Python, Git, 7-Zip, mengkloning repositori, memasang pustaka, serta mengunduh dan mengonfigurasi Firefox Portable Edition resmi!*
+Modul ini telah mengadopsi standar **PEP 517/518/621** (`pyproject.toml`) dan dapat dipasang langsung ke lingkungan Python lokal:
 
----
-
-### 🛠️ Pemasangan Manual Langkah demi Langkah (Alternatif)
-
-#### 1. Prasyarat & Pemasangan Dependensi
-Pastikan Python 3.10+ telah terpasang. Direkomendasikan memasang **7-Zip** agar proses ekstraksi paket Firefox Portable berjalan 100% otomatis di latar belakang tanpa dialog GUI:
-```powershell
-# Pasang 7-Zip (jika belum ada di sistem)
-winget install 7zip.7zip
-
-# Kloning repositori & pasang pustaka Python
-git clone https://github.com/ululazmi18/firefox-stealth-automation.git
+### 1. Pemasangan Mode Editable (Lokal Pengembang)
+```bash
 cd firefox-stealth-automation
-pip install -r requirements.txt
+pip install -e .
+```
+Atau menggunakan `uv`:
+```bash
+uv pip install -e .
 ```
 
-#### 2. Bootstrapping Firefox Portable (Satu Baris Perintah)
-Jalankan bootstrapper mandiri untuk mengunduh, mengekstrak, dan mengonfigurasi Firefox Portable Edition resmi secara senyap:
-```powershell
-python setup_browser.py
+### 2. Pemasangan Langsung dari Git URL
+```bash
+pip install git+https://github.com/ululazmi18/firefox-stealth-automation.git
 ```
-*Skrip ini akan memeriksa ketersediaan biner, mengunduh dari CDN PortableApps resmi (dengan fitur auto-resume & perpanjangan timeout), mengekstraknya menggunakan 7-Zip, dan menyiapkan direktori profil `browser_profile/` yang telah di-hardening anti-deteksi bot.*
-
-### 3. Autentikasi Google Flow Headless (`login.py`)
-Hubungkan akun Google langsung dari baris perintah terminal tanpa membuka browser manual:
-```powershell
-# Jalankan login interaktif Full CLI
-python login.py
-
-# Atau sertakan kredensial langsung via argumen CLI
-python login.py --email akun@gmail.com --password "KataSandiAnda"
-```
-*Fitur ini berjalan 100% senyap di latar belakang, menangani prompt 2FA/notifikasi perangkat ponsel, dan mengekspor token sesi langsung ke `browser_profile/cookies.sqlite`.*
-
-### 4. Menjalankan Suite Audit 17 Situs Benchmark
-Jalankan harness pengujian untuk memverifikasi jejak otomasi kapan saja:
-```powershell
-python harness_audit.py --run-id verifikasi_1
-```
-*Tangkapan layar full-page `.png` dan data JSON dari seluruh 17 situs benchmark akan tersimpan di direktori `reports/verifikasi_1/`.*
 
 ---
 
-## 💻 Penggunaan Modul Python (`firefox_stealth`)
+## 🛠️ CLI Terpadu: `firefox-stealth`
 
-Paket `firefox_stealth` dirancang dengan arsitektur modular **Separation of Concerns (SoC)** dan standar kemasan **PEP 517/518/621**. Modul ini menyediakan dua gaya penggunaan: *High-Level Context Manager* (`StealthBrowser`) dan *Low-Level Socket Client* (`MarionetteDriver`).
+Setelah dipasang, perintah CLI `firefox-stealth` aktif di terminal sistem:
 
-### 1. Gaya High-Level (`StealthBrowser` — Direkomendasikan)
-Mengelola siklus hidup proses peramban, port TCP, handshake, serta penutupan sesi secara otomatis dan bersih (*auto-cleanup*):
+```bash
+# 1. Hubungkan akun Google (Google Flow / Web) Full CLI ke profil lokal proyek
+firefox-stealth login --email akun@gmail.com --password "KataSandi"
+
+# 2. Buka browser visual (headful) untuk login manual ke situs apa pun
+firefox-stealth login --url "https://twitter.com/login" --interactive
+
+# 3. Uji keabsahan sesi login di background (headless)
+firefox-stealth login --verify
+
+# 4. Meluncurkan browser stealth pada port tertentu (misal port 2829)
+firefox-stealth launch --url "https://bot.sannysoft.com" --headful --port 2829
+
+# 5. Kelola profil dan periksa cookies yang tersimpan
+firefox-stealth profile --action info
+firefox-stealth profile --action cookies --domain google
+firefox-stealth profile --action clean   # Bersihkan lockfile yatim parent.lock
+
+# 6. Siapkan biner Firefox Portable resmi
+firefox-stealth setup
+```
+
+---
+
+## 💻 Penggunaan sebagai Modul Python (`firefox_stealth`)
+
+### 1. Peluncuran Browser dengan Isolasi Profil Lokal Proyek (`StealthBrowser`)
+Secara default, `StealthBrowser` menggunakan folder `browser_profile` di direktori proyek aktif tempat skrip dieksekusi:
 
 ```python
 from firefox_stealth import StealthBrowser
 
-# Jalankan peramban headless secara senyap
+# Profil akan dibuat dan disimpan di ./browser_profile (proyek lokal)
 with StealthBrowser(headless=True) as browser:
-    # 1. Navigasi ke target web
-    browser.navigate("https://bot-detector.rebrowser.net")
-
-    # 2. Periksa status navigasi dan neutralisasi anti-bot
-    webdriver_state = browser.execute_script("return navigator.webdriver;")
-    page_title = browser.execute_script("return document.title;")
-    print(f"Halaman: {page_title} | navigator.webdriver: {webdriver_state}")
-
-    # 3. Tangkap visual viewport dalam format PNG bytes
-    screenshot_bytes = browser.take_screenshot()
-    with open("hasil_uji.png", "wb") as f:
-        f.write(screenshot_bytes)
+    browser.driver.navigate("https://bot-detector.rebrowser.net")
+    print(f"Judul: {browser.driver.title}")
+    print(f"Webdriver Flag: {browser.driver.execute_script('return navigator.webdriver;')}")
+    
+    # Tangkap visual viewport dalam format bytes PNG
+    screenshot = browser.driver.take_screenshot()
+    with open("hasil.png", "wb") as f:
+        f.write(screenshot)
 ```
 
-### 2. Gaya Low-Level (`MarionetteDriver`)
-Untuk integrasi tingkat lanjut di mana proses peramban dikontrol secara terpisah:
-
+### 2. Autentikasi Mandiri & Pengelolaan Cookie Terisolasi
 ```python
-from firefox_stealth import MarionetteDriver
+from firefox_stealth import (
+    automated_google_login,
+    verify_session_headless,
+    read_profile_cookies,
+    resolve_profile_dir,
+)
 
-driver = MarionetteDriver(host="127.0.0.1", port=2828)
-driver.connect()
+# 1. Jalankan login otomatis Full CLI ke Google
+success = automated_google_login(
+    email="akun@gmail.com",
+    password="kata_sandi",
+    target_url="https://flow.google.com/",
+)
 
-# Interaksi elemen tanpa menyentuh kursor fisik OS (Zero Cursor Hijacking)
-elem_id = driver.find_element(using="css selector", value="input[name='q']")
-driver.send_keys(elem_id, "Firefox Stealth Automation\n")
+# 2. Verifikasi status sesi di latar belakang
+status = verify_session_headless()
+print("Status Sesi:", status["message"])
 
-driver.close()
+# 3. Baca cookie akun yang tersimpan secara aman
+profile_dir = resolve_profile_dir()
+cookies = read_profile_cookies(profile_dir, domain_filter="google")
+print(f"Ditemukan {len(cookies)} cookie Google tersimpan.")
 ```
 
 ---
 
 ## 🌐 Ekosistem & Integrasi Proyek Terkait
 
-`firefox-stealth-automation` berfungsi sebagai fondasi mesin peramban anti-deteksi bot untuk aplikasi hilir (*downstream apps*). 
+`firefox-stealth-automation` berfungsi sebagai fondasi peramban anti-deteksi bot untuk aplikasi hilir (*downstream apps*):
 
 * 🎨 **[Google Flow Image Generator (image-generator)](https://github.com/ululazmi18/image-generator):**
-  Aplikasi otomasi pembuatan gambar AI 100% senyap berbasis Google Flow. `image-generator` memanfaatkan `firefox_stealth.MarionetteDriver` untuk mengirimkan prompt via ProseMirror DOM, memantau kanvas, dan mengunduh hasil gambar 1K tanpa memblokir kursor pengguna.
+  Aplikasi otomasi pembuatan gambar AI 100% senyap berbasis Google Flow. `image-generator` secara otomatis mengimpor `from firefox_stealth import MarionetteDriver` dari paket ini dan menggunakan profil lokal proyek tanpa tumpang tindih dengan proyek lain.
   
-  **Integrasi Berdampingan (Side-by-Side):**
-  Cukup letakkan kedua repositori berdampingan dalam satu folder workspace:
+  **Struktur Penempatan Berdampingan di `D:\Tools`:**
   ```text
-  workspace/
-  ├── firefox-stealth-automation/    # Mesin browser & penyimpanan profil/sesi login
-  └── image-generator/               # Aplikasi otomasi generasi gambar
+  D:\Tools/
+  ├── firefox-stealth-automation/    # Mesin browser stealth & utilitas CLI
+  ├── image-generator/               # Aplikasi otomasi pembuatan gambar AI
+  └── setup_tools_dan_mcp.ps1        # Otomasi sinkronisasi toolchain terpusat
   ```
-  `image-generator` secara otomatis mendeteksi biner `firefox_portable` dan sesi login `browser_profile` dari repositori ini tanpa perlu konfigurasi manual!
 
 ---
 
@@ -162,24 +165,29 @@ driver.close()
 ```text
 firefox-stealth-automation/
 ├── firefox_stealth/           # Paket Modul Python Utama (PEP 517/518/621 & SoC)
-│   ├── __init__.py            # Titik masuk publik (StealthBrowser, MarionetteDriver, dll.)
-│   ├── browser.py             # Pengontrol siklus hidup peramban StealthBrowser
+│   ├── __init__.py            # Titik masuk publik (StealthBrowser, MarionetteDriver, auth, dll.)
+│   ├── auth.py                # Mesin autentikasi Google Flow, Full CLI & interactive login
+│   ├── browser.py             # Pengontrol siklus hidup peramban StealthBrowser & biner
+│   ├── cli.py                 # Titik masuk CLI terpadu `firefox-stealth`
 │   ├── driver.py              # Klien soket protokol Marionette JSON Wire native
 │   ├── exceptions.py          # Hierarki pengecualian terstruktur (MarionetteError)
-│   └── profile.py             # Generator konfigurasi hardening prefs.js & user.js
-├── tests/                     # Rangkaian pengujian unit otomatis
-│   ├── test_browser.py
-│   ├── test_driver.py
-│   └── test_profile.py
+│   ├── profile.py             # Isolasi profil per-proyek, cookie vault, & self-healing locks
+│   └── stealth_addon/         # Salinan bundle WebExtension Stealth Bridge
+├── tests/                     # Rangkaian pengujian unit otomatis (19 tests)
+│   ├── test_cli.py            # Pengujian utilitas CLI
+│   ├── test_driver_logic.py   # Pengujian Marionette protocol logic
+│   ├── test_exceptions.py     # Pengujian hierarki exception
+│   ├── test_profile.py        # Pengujian inisialisasi user.js & cookies
+│   └── test_profile_isolation.py # Pengujian isolasi profil per-proyek & self-healing locks
 ├── stealth_addon/             # Native Gecko WebExtension Stealth Bridge
 │   ├── manifest.json          # Manifest WebExtension V2
 │   └── stealth.js             # Injeksi exportFunction/cloneInto di Navigator.prototype
-├── pyproject.toml             # Konfigurasi packaging modern PEP 517/518/621
-├── setup_browser.py           # CLI bootstrapper installer Firefox Portable otomatis
-├── login.py                   # Standalone Full CLI Google Flow & OAuth 2FA login engine
+├── pyproject.toml             # Konfigurasi packaging modern PEP 517/518/621 & CLI script
+├── setup_browser.py           # Bootstrapper installer Firefox Portable otomatis
+├── login.py                   # Backward-compatible CLI Google Flow authenticator
 ├── harness_audit.py           # QA multi-site benchmark audit suite (17 situs deteksi)
 ├── REPORT.md                  # Laporan teknis final & analisis empiris komparatif
-├── requirements.txt           # Dependensi modul (rich, curl_cffi)
+├── requirements.txt           # Dependensi modul (rich, curl_cffi, playwright)
 ├── LICENSE                    # Lisensi Open Source (MIT)
 ├── .gitignore                 # Filter proteksi file biner, profil, dan artefak uji
 └── README.md                  # Dokumentasi proyek
@@ -187,14 +195,6 @@ firefox-stealth-automation/
 
 ---
 
-## 🛡️ Kebijakan Keamanan & Etika Pengujian
-
-Framework ini dirancang untuk tujuan pengujian jaminan kualitas (**QA Automation**), audit ketahanan peramban terhadap deteksi sidik jari digital (**Fingerprint Hardening**), dan riset ketahanan otomasi. Hanya diuji terhadap 17 situs benchmark deteksi bot resmi. Penulis tidak bertanggung jawab atas penyalahgunaan alat ini di luar tujuan riset dan pengujian yang sah.
-
----
-
 ## 📄 Lisensi
-
-Didistribusikan di bawah lisensi **MIT License**. Lihat [LICENSE](LICENSE) untuk informasi lebih lanjut.
+Didistribusikan di bawah lisensi **MIT License**. Lihat [LICENSE](LICENSE) untuk informasi lebih lanjut.  
 Dibuat oleh [Ulul Azmi](https://github.com/ululazmi18).
-
