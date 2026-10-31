@@ -20,6 +20,24 @@ user_pref("toolkit.telemetry.enabled", false);
 user_pref("toolkit.telemetry.reportingpolicy.firstRun", false);
 user_pref("browser.sessionstore.resume_from_crash", false);
 
+// ⚡ TUNING EFISIENSI RAM & KECEPATAN (ZERO-WASTE RESOURCE)
+user_pref("accessibility.force_disabled", 1);               // Hemat 50-80MB RAM (matikan accessibility engine)
+user_pref("dom.ipc.processCount", 1);                       // Hemat 150MB+ RAM (batasi 1 content process untuk otomasi)
+user_pref("browser.cache.disk.enable", false);              // Matikan cache disk (minimalkan write I/O di Windows)
+user_pref("browser.cache.memory.enable", true);
+user_pref("browser.cache.memory.capacity", 32768);           // Batasi cache RAM 32MB (bukan ratusan MB)
+user_pref("image.mem.decodeondraw", true);                  // Hanya decode gambar saat dirender
+user_pref("browser.startup.homepage", "about:blank");       // Startup instan tanpa load feed
+user_pref("browser.newtabpage.enabled", false);
+user_pref("browser.safebrowsing.malware.enabled", false);   // Cegah download background DB besar
+user_pref("browser.safebrowsing.phishing.enabled", false);
+user_pref("extensions.pocket.enabled", false);
+user_pref("network.captive-portal-service.enabled", false);
+user_pref("app.update.auto", false);
+user_pref("app.update.enabled", false);
+user_pref("datareporting.healthreport.uploadEnabled", false);
+user_pref("network.http.max-persistent-connections-per-server", 10);
+
 // HARDENING WEBRTC & PRIVASI JARINGAN
 user_pref("media.peerconnection.enabled", true);
 user_pref("media.peerconnection.ice.no_host", true);
@@ -116,6 +134,11 @@ def setup_clean_profile(profile_dir: Union[Path, str], port: int = 2828) -> Path
     )
     if not user_js.exists():
         user_js.write_text(prefs, encoding="utf-8")
+    else:
+        # Self-updating: Tambahkan tuning RAM jika profil lama belum memiliki pref terbaru
+        content = user_js.read_text(encoding="utf-8", errors="ignore")
+        if "accessibility.force_disabled" not in content:
+            user_js.write_text(prefs, encoding="utf-8")
     return p
 
 

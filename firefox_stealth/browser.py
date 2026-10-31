@@ -210,7 +210,7 @@ class StealthBrowser:
         except OSError as exc:
             raise BrowserProcessError(f"Gagal mengeksekusi biner peramban: {exc}") from exc
 
-        # Tunggu pembukaan port Marionette
+        # Tunggu pembukaan port Marionette (Adaptive Fast-Polling 50ms)
         self._driver = MarionetteDriver(host="127.0.0.1", port=self.port)
         start_time = time.time()
         while time.time() - start_time < startup_timeout:
@@ -218,9 +218,9 @@ class StealthBrowser:
                 raise BrowserProcessError(
                     f"Proses Firefox berhenti sebelum siap (kode keluar: {self.process.returncode})."
                 )
-            if self._driver.is_port_open(timeout=0.4):
+            if self._driver.is_port_open(timeout=0.15):
                 break
-            time.sleep(0.3)
+            time.sleep(0.05)
         else:
             self.stop()
             raise MarionetteTimeoutError(
