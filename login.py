@@ -13,7 +13,19 @@ _pkg_root = Path(__file__).resolve().parent
 if str(_pkg_root) not in sys.path:
     sys.path.insert(0, str(_pkg_root))
 
-from firefox_stealth.auth import main
+from firefox_stealth.auth import (
+    automated_google_login,
+    launch_interactive_login,
+    main,
+    verify_session_headless,
+)
+
+__all__ = [
+    "automated_google_login",
+    "launch_interactive_login",
+    "verify_session_headless",
+    "main",
+]
 
 if __name__ == "__main__":
     sys.exit(main())
